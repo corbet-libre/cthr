@@ -862,16 +862,69 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let groups = prepare();
         let effects = groups.prepare_effects();
         let mut clock = Time::default();
-        let public_request = group_support::request(&empty, cgrp::Command::Create{id:SLOT,members:group_support::members(0,3),seed:true},"m0",group_support::members(0,3),true,1000);
-        let public = cgrp::prepare(&empty,&public_request,&source,&group_support::TestAuthority,1000,10).unwrap();
-        assert_eq!(at.create_fork(&mut a.port(),&public.prepare_effects()[0],&packages,&mut clock).await.err(),Some(Error::Unavailable));
+        let public_request = group_support::request(
+            &empty,
+            cgrp::Command::Create {
+                id: SLOT,
+                members: group_support::members(0, 3),
+                seed: true,
+            },
+            "m0",
+            group_support::members(0, 3),
+            true,
+            1000,
+        );
+        let public = cgrp::prepare(
+            &empty,
+            &public_request,
+            &source,
+            &group_support::TestAuthority,
+            1000,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            at.create_fork(
+                &mut a.port(),
+                &public.prepare_effects()[0],
+                &packages,
+                &mut clock
+            )
+            .await
+            .err(),
+            Some(Error::Unavailable)
+        );
         let mut wrong_cert = b.handle.certificate().clone();
-        wrong_cert.binding = Binding::new("beta","m1").unwrap();
-        let foreign_package = b.wire_package(serde_json::to_vec(&wrong_cert).unwrap()).await;
-        assert_eq!(at.create_fork(&mut a.port(),&effects[0],&[foreign_package,packages[1].clone()],&mut clock).await.err(),Some(Error::Authority));
-        wrong_cert.binding = Binding::new("alpha","outsider").unwrap();
-        let unknown_package = b.wire_package(serde_json::to_vec(&wrong_cert).unwrap()).await;
-        assert_eq!(at.create_fork(&mut a.port(),&effects[0],&[unknown_package,packages[1].clone()],&mut clock).await.err(),Some(Error::Authority));
+        wrong_cert.binding = Binding::new("beta", "m1").unwrap();
+        let foreign_package = b
+            .wire_package(serde_json::to_vec(&wrong_cert).unwrap())
+            .await;
+        assert_eq!(
+            at.create_fork(
+                &mut a.port(),
+                &effects[0],
+                &[foreign_package, packages[1].clone()],
+                &mut clock
+            )
+            .await
+            .err(),
+            Some(Error::Authority)
+        );
+        wrong_cert.binding = Binding::new("alpha", "outsider").unwrap();
+        let unknown_package = b
+            .wire_package(serde_json::to_vec(&wrong_cert).unwrap())
+            .await;
+        assert_eq!(
+            at.create_fork(
+                &mut a.port(),
+                &effects[0],
+                &[unknown_package, packages[1].clone()],
+                &mut clock
+            )
+            .await
+            .err(),
+            Some(Error::Authority)
+        );
 
         let wrong_slot = Threads::load(a.binding.clone(), [18; 32], &astore).unwrap();
         assert_eq!(
@@ -1436,10 +1489,24 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             .threads()
             .history_for(&expanded.prepare_effects()[0], &mut advanced)
             .unwrap();
-        assert_eq!(accepted.threads().history_for(&prepare().prepare_effects()[0], &mut advanced).err(), Some(Error::Authority));
+        assert_eq!(
+            accepted
+                .threads()
+                .history_for(&prepare().prepare_effects()[0], &mut advanced)
+                .err(),
+            Some(Error::Authority)
+        );
         let mut expired_history = Time::default();
-        expired_history.0.set(expanded.prepare_effects()[0].valid_until());
-        assert_eq!(accepted.threads().history_for(&expanded.prepare_effects()[0], &mut expired_history).err(), Some(Error::Authority));
+        expired_history
+            .0
+            .set(expanded.prepare_effects()[0].valid_until());
+        assert_eq!(
+            accepted
+                .threads()
+                .history_for(&expanded.prepare_effects()[0], &mut expired_history)
+                .err(),
+            Some(Error::Authority)
+        );
 
         assert_eq!(disclosed.len(), 2);
         assert_eq!(disclosed.last().unwrap().bytes, b"later");
@@ -1671,7 +1738,10 @@ fn malformed_owned_checkpoints_and_locked_keys_fail_without_output() {
             threads.key_package(&mut replacement.port()).await.err(),
             Some(Error::Authority)
         );
-        a.directory.0.borrow_mut().insert("alice".into(), original_lineage);
+        a.directory
+            .0
+            .borrow_mut()
+            .insert("alice".into(), original_lineage);
         a.keys.lock();
         assert_eq!(
             threads.key_package(&mut a.port()).await.err(),

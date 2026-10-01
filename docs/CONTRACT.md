@@ -35,11 +35,11 @@ tamper, revoked-device refusal, replay and competing candidates.
 Sent plaintext remains pending until Delivery's verified ACK capability is
 accepted in the same owner transaction. Durable Outgoing and Accepted capabilities
 have no public constructors; Delivery consumes them instead of raw UI events.
-The real Delivery implementation of Acceptance is still an integration seam.
-Fork/room preparation is pending Groups' typed policy and asynchronous shared
-checkpoint seam; ordered room authority belongs to Attend. No raw roster API,
-second signer, replacement room policy or successful unavailable proof exists.
-These are incomplete acceptance obligations, not implemented successes.
+Delivery supplies the authenticated recipient Acceptance implementation and
+persists it with this owner checkpoint. Immutable forks consume Groups' typed
+policy and asynchronous shared checkpoint below. Ordered room authority belongs
+to Attend and remains unavailable. No raw roster API, second signer, replacement
+room policy or successful unavailable proof exists.
 
 ## Immutable forks
 
@@ -98,3 +98,18 @@ Each current thread checkpoint is bounded by Store's existing per-value limit.
 Threads rejects an oversized candidate before publication; Store validates every
 restored value before handing it to the owner. No independent larger storage
 allowance, truncated history, or successful partial checkpoint is implied.
+
+## Device continuation boundary
+
+Current MLS leaf credentials bind one scoped device certificate per member.
+Reopening the encrypted checkpoint with the same authorized certificate preserves
+its accepted history and live ratchets. Another enrolled device certificate is
+refused, even for the same member. Concurrent devices and authenticated MLS
+continuation after device loss require the Keys/Groups owner capability; the
+current engine does not claim either. Copying a ratchet between devices or
+inventing a device lease is not a recovery mechanism.
+
+Hostile-input vectors use actual upstream OpenMLS with the fixture's borrowed
+Keys signer to produce empty/oversized application content and membership
+proposals. Direct and immutable-fork receivers refuse those messages without
+publishing a changed checkpoint. Fixtures do not establish production attestation.

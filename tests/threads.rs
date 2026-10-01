@@ -32,10 +32,17 @@ struct Grant {
     signature: [u8; 64],
 }
 impl Grant {
-    fn new() -> Self { Self::pair("alice", "bob", SLOT) }
-    fn pair(first: &str, second: &str, slot: [u8;32]) -> Self {
-        let (a,b) = if first < second { (first,second) } else { (second,first) };
-        let bytes = serde_json::to_vec(&("test.direct.authorization", "alpha", a, b, slot)).unwrap();
+    fn new() -> Self {
+        Self::pair("alice", "bob", SLOT)
+    }
+    fn pair(first: &str, second: &str, slot: [u8; 32]) -> Self {
+        let (a, b) = if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let bytes =
+            serde_json::to_vec(&("test.direct.authorization", "alpha", a, b, slot)).unwrap();
         Self {
             signature: SigningKey::from_bytes(&[77; 32]).sign(&bytes).to_bytes(),
             bytes,
@@ -155,20 +162,31 @@ impl cthr::Acceptance for Receipt {
 }
 // Compose two actual owner ports incorrectly to exercise the binding guard.
 // Verification and signing still run in Keys; no accepting authority is added.
-struct Misbound<'a, A, B> { advertised: &'a mut A, signer: &'a mut B }
+struct Misbound<'a, A, B> {
+    advertised: &'a mut A,
+    signer: &'a mut B,
+}
 impl<A: cthr::keys::Custody, B: cthr::keys::Custody> cthr::keys::Custody for Misbound<'_, A, B> {
-    fn certificate(&self) -> &ckmg::KeyCertificate { self.advertised.certificate() }
+    fn certificate(&self) -> &ckmg::KeyCertificate {
+        self.advertised.certificate()
+    }
     async fn verify(&mut self, certificate: &ckmg::KeyCertificate) -> cthr::Result<()> {
         self.advertised.verify(certificate).await
     }
-    async fn use_signer<T>(&mut self, use_signer: impl for<'key> FnOnce(ckmg::Ed25519Signer<'key>) -> cthr::Result<T>) -> cthr::Result<T> {
+    async fn use_signer<T>(
+        &mut self,
+        use_signer: impl for<'key> FnOnce(ckmg::Ed25519Signer<'key>) -> cthr::Result<T>,
+    ) -> cthr::Result<T> {
         self.signer.use_signer(use_signer).await
     }
 }
 struct MlsFixtureSigner<'a>(ckmg::Ed25519Signer<'a>);
 impl openmls_traits::signatures::Signer for MlsFixtureSigner<'_> {
     fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, openmls_traits::signatures::SignerError> {
-        self.0.sign(bytes).map(|signature| signature.to_vec()).map_err(|_| openmls_traits::signatures::SignerError::SigningError)
+        self.0
+            .sign(bytes)
+            .map(|signature| signature.to_vec())
+            .map_err(|_| openmls_traits::signatures::SignerError::SigningError)
     }
     fn signature_scheme(&self) -> openmls_traits::types::SignatureScheme {
         openmls_traits::types::SignatureScheme::ED25519
@@ -208,10 +226,58 @@ impl Fixture {
             credential: BasicCredential::new(identity).into(),
             signature_key: self.handle.certificate().key.value().to_vec().into(),
         };
-        self.keys.with_ed25519_signer(&self.handle, |signer| {
-            KeyPackage::builder().build(Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519, &provider, &MlsFixtureSigner(signer), credential)
-                .unwrap().key_package().tls_serialize_detached().unwrap()
-        }).await.unwrap()
+        self.keys
+            .with_ed25519_signer(&self.handle, |signer| {
+                KeyPackage::builder()
+                    .build(
+                        Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+                        &provider,
+                        &MlsFixtureSigner(signer),
+                        credential,
+                    )
+                    .unwrap()
+                    .key_package()
+                    .tls_serialize_detached()
+                    .unwrap()
+            })
+            .await
+            .unwrap()
+    }
+    // Adversarial peer input comes from actual upstream OpenMLS using the
+    // fixture's committed provider state and borrowed Keys signer. Production
+    // APIs deliberately never expose this provider state or permit these sends.
+    async fn upstream_message(
+        &mut self,
+        store: &Store<Memory>,
+        plaintext: Option<&[u8]>,
+    ) -> Vec<u8> {
+        use openmls::prelude::*;
+        use openmls_traits::OpenMlsProvider;
+        use tls_codec::Serialize;
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(store.read("cthr", &SLOT).unwrap().unwrap()).unwrap();
+        let entries: Vec<(Vec<u8>, Vec<u8>)> =
+            serde_json::from_value(snapshot["storage"].clone()).unwrap();
+        let provider = openmls_rust_crypto::OpenMlsRustCrypto::default();
+        provider.storage().values.write().unwrap().extend(entries);
+        let mut group = MlsGroup::load(provider.storage(), &GroupId::from_slice(&SLOT))
+            .unwrap()
+            .unwrap();
+        self.keys
+            .with_ed25519_signer(&self.handle, |signer| {
+                let signer = MlsFixtureSigner(signer);
+                let message = if let Some(bytes) = plaintext {
+                    group.create_message(&provider, &signer, bytes).unwrap()
+                } else {
+                    group
+                        .propose_remove_member(&provider, &signer, group.own_leaf_index())
+                        .unwrap()
+                        .0
+                };
+                message.tls_serialize_detached().unwrap()
+            })
+            .await
+            .unwrap()
     }
     fn port(&mut self) -> KeyPort<'_, support::Memory, Time, support::Random, Guard, Directory> {
         KeyPort {
@@ -270,7 +336,15 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
         let at = Threads::load(a.binding.clone(), SLOT, &astore).unwrap();
         let bt = Threads::load(b.binding.clone(), SLOT, &bstore).unwrap();
         assert_eq!(at.epoch().err(), Some(Error::State));
-        assert_eq!(at.key_package(&mut Misbound {advertised: &mut a.port(), signer: &mut b.port()}).await.err(), Some(Error::Authority));
+        assert_eq!(
+            at.key_package(&mut Misbound {
+                advertised: &mut a.port(),
+                signer: &mut b.port()
+            })
+            .await
+            .err(),
+            Some(Error::Authority)
+        );
         let candidate = bt.key_package(&mut b.port()).await.unwrap();
         assert!(bstore.load_pending().unwrap().is_empty());
         assert!(candidate.prepared_message().is_none());
@@ -282,18 +356,47 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
             panic!()
         };
         let mut grant = Grant::new();
-        assert_eq!(at.create_direct(&mut a.port(), &mut grant, "alice", bytes).await.err(), Some(Error::Scope));
-        for (identity, expected) in [(vec![7; 16_385], Error::Limit), (b"invalid".to_vec(), Error::Encoding)] {
+        assert_eq!(
+            at.create_direct(&mut a.port(), &mut grant, "alice", bytes)
+                .await
+                .err(),
+            Some(Error::Scope)
+        );
+        for (identity, expected) in [
+            (vec![7; 16_385], Error::Limit),
+            (b"invalid".to_vec(), Error::Encoding),
+        ] {
             let package = b.wire_package(identity).await;
-            assert_eq!(at.create_direct(&mut a.port(), &mut grant, "bob", &package).await.err(), Some(expected));
+            assert_eq!(
+                at.create_direct(&mut a.port(), &mut grant, "bob", &package)
+                    .await
+                    .err(),
+                Some(expected)
+            );
         }
-        let mut wrong_purpose = b.handle.certificate().clone(); wrong_purpose.purpose = ctcs::purpose();
-        let mut wrong_key = b.handle.certificate().clone(); wrong_key.key = a.handle.certificate().clone().key;
-        let mut wrong_peer = b.handle.certificate().clone(); wrong_peer.binding = Binding::new("alpha", "other").unwrap();
-        let mut wrong_community = b.handle.certificate().clone(); wrong_community.binding = Binding::new("beta", "bob").unwrap();
-        for (certificate, expected) in [(wrong_purpose,Error::Authority),(wrong_key,Error::Authority),(wrong_peer,Error::Scope),(wrong_community,Error::Scope)] {
-            let package = b.wire_package(serde_json::to_vec(&certificate).unwrap()).await;
-            assert_eq!(at.create_direct(&mut a.port(), &mut grant, "bob", &package).await.err(), Some(expected));
+        let mut wrong_purpose = b.handle.certificate().clone();
+        wrong_purpose.purpose = ctcs::purpose();
+        let mut wrong_key = b.handle.certificate().clone();
+        wrong_key.key = a.handle.certificate().clone().key;
+        let mut wrong_peer = b.handle.certificate().clone();
+        wrong_peer.binding = Binding::new("alpha", "other").unwrap();
+        let mut wrong_community = b.handle.certificate().clone();
+        wrong_community.binding = Binding::new("beta", "bob").unwrap();
+        for (certificate, expected) in [
+            (wrong_purpose, Error::Authority),
+            (wrong_key, Error::Authority),
+            (wrong_peer, Error::Scope),
+            (wrong_community, Error::Scope),
+        ] {
+            let package = b
+                .wire_package(serde_json::to_vec(&certificate).unwrap())
+                .await;
+            assert_eq!(
+                at.create_direct(&mut a.port(), &mut grant, "bob", &package)
+                    .await
+                    .err(),
+                Some(expected)
+            );
         }
         for invalid in [vec![], vec![0; 1024 * 1024 + 1], vec![1, 2, 3]] {
             assert!(
@@ -341,6 +444,22 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
             .await
             .unwrap();
         assert_eq!(joined.threads().epoch().unwrap(), 1);
+        for (plaintext, expected) in [
+            (Some(vec![]), Error::Limit),
+            (Some(vec![7; 1024 * 1024 / 2 + 1]), Error::Limit),
+            (None, Error::Unavailable),
+        ] {
+            let wire = a.upstream_message(&astore, plaintext.as_deref()).await;
+            assert_eq!(
+                joined
+                    .threads()
+                    .receive(&mut b.port(), &mut grant, &wire)
+                    .await
+                    .err(),
+                Some(expected)
+            );
+        }
+
         assert_eq!(
             joined.threads().key_package(&mut b.port()).await.err(),
             Some(Error::State)
@@ -599,7 +718,16 @@ fn candidates_refuse_cross_scope_and_changed_checkpoint() {
             Some(Error::Scope)
         );
         first
-            .commit(&mut a.port(), &mut Grant::new(), &mut store, [1; 32], &[])
+            .commit(
+                &mut a.port(),
+                &mut Grant::new(),
+                &mut store,
+                [1; 32],
+                &[cwst::Change::Delete {
+                    owner: "fixture",
+                    key: b"absent",
+                }],
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -734,6 +862,17 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let groups = prepare();
         let effects = groups.prepare_effects();
         let mut clock = Time::default();
+        let public_request = group_support::request(&empty, cgrp::Command::Create{id:SLOT,members:group_support::members(0,3),seed:true},"m0",group_support::members(0,3),true,1000);
+        let public = cgrp::prepare(&empty,&public_request,&source,&group_support::TestAuthority,1000,10).unwrap();
+        assert_eq!(at.create_fork(&mut a.port(),&public.prepare_effects()[0],&packages,&mut clock).await.err(),Some(Error::Unavailable));
+        let mut wrong_cert = b.handle.certificate().clone();
+        wrong_cert.binding = Binding::new("beta","m1").unwrap();
+        let foreign_package = b.wire_package(serde_json::to_vec(&wrong_cert).unwrap()).await;
+        assert_eq!(at.create_fork(&mut a.port(),&effects[0],&[foreign_package,packages[1].clone()],&mut clock).await.err(),Some(Error::Authority));
+        wrong_cert.binding = Binding::new("alpha","outsider").unwrap();
+        let unknown_package = b.wire_package(serde_json::to_vec(&wrong_cert).unwrap()).await;
+        assert_eq!(at.create_fork(&mut a.port(),&effects[0],&[unknown_package,packages[1].clone()],&mut clock).await.err(),Some(Error::Authority));
+
         let wrong_slot = Threads::load(a.binding.clone(), [18; 32], &astore).unwrap();
         assert_eq!(
             wrong_slot
@@ -879,12 +1018,57 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             Some(Error::Authority)
         );
         let (_, mut divergent) = a.store().await;
-        let direct = at.create_direct(&mut a.port(), &mut Grant::pair("m0","m1",SLOT), "m1", &packages[0]).await.unwrap()
-            .commit(&mut a.port(), &mut Grant::pair("m0","m1",SLOT), &mut divergent, [1;32], &[]).await.unwrap();
-        let Event::Invitation {welcome: undersized, commit: not_welcome} = &direct.events()[0] else {panic!()};
-        assert_eq!(bp.threads().join_fork(&mut b.port(), &effects[0], undersized, &mut clock).await.err(), Some(Error::Authority));
-        assert_eq!(bp.threads().join_fork(&mut b.port(), &effects[0], not_welcome, &mut clock).await.err(), Some(Error::Encoding));
-        assert_eq!(bp.threads().join_direct(&mut b.port(), &mut Grant::pair("m0","m1",SLOT), "m0", not_welcome).await.err(), Some(Error::Encoding));
+        let direct = at
+            .create_direct(
+                &mut a.port(),
+                &mut Grant::pair("m0", "m1", SLOT),
+                "m1",
+                &packages[0],
+            )
+            .await
+            .unwrap()
+            .commit(
+                &mut a.port(),
+                &mut Grant::pair("m0", "m1", SLOT),
+                &mut divergent,
+                [1; 32],
+                &[],
+            )
+            .await
+            .unwrap();
+        let Event::Invitation {
+            welcome: undersized,
+            commit: not_welcome,
+        } = &direct.events()[0]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            bp.threads()
+                .join_fork(&mut b.port(), &effects[0], undersized, &mut clock)
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
+        assert_eq!(
+            bp.threads()
+                .join_fork(&mut b.port(), &effects[0], not_welcome, &mut clock)
+                .await
+                .err(),
+            Some(Error::Encoding)
+        );
+        assert_eq!(
+            bp.threads()
+                .join_direct(
+                    &mut b.port(),
+                    &mut Grant::pair("m0", "m1", SLOT),
+                    "m0",
+                    not_welcome
+                )
+                .await
+                .err(),
+            Some(Error::Encoding)
+        );
         let candidate = at
             .create_fork(&mut a.port(), &effects[0], &packages, &mut clock)
             .await
@@ -904,7 +1088,18 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let Event::Invitation { welcome, .. } = &joined.events()[0] else {
             panic!()
         };
-        assert_eq!(bp.threads().join_direct(&mut b.port(), &mut Grant::pair("m0","m1",SLOT), "m0", welcome).await.err(), Some(Error::Scope));
+        assert_eq!(
+            bp.threads()
+                .join_direct(
+                    &mut b.port(),
+                    &mut Grant::pair("m0", "m1", SLOT),
+                    "m0",
+                    welcome
+                )
+                .await
+                .err(),
+            Some(Error::Scope)
+        );
         assert_eq!(group_state.revision(), 1);
         let initial = prepare();
         let effect = initial.prepare_effects();
@@ -1051,6 +1246,25 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         };
         let mut at = joined.into_threads();
         let mut bt = bjoined.into_threads();
+        for (plaintext, expected) in [
+            (Some(vec![]), Error::Limit),
+            (Some(vec![7; 1024 * 1024 / 2 + 1]), Error::Limit),
+            (None, Error::Unavailable),
+        ] {
+            let wire = a.upstream_message(&astore, plaintext.as_deref()).await;
+            assert_eq!(
+                bt.receive_group(
+                    &mut b.port(),
+                    &contacts("m1", &bstore),
+                    &source,
+                    &mut clock,
+                    &wire
+                )
+                .await
+                .err(),
+                Some(expected)
+            );
+        }
         for index in 0..policy.bands[0].burst {
             let sent = at
                 .send_group(
@@ -1222,6 +1436,11 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             .threads()
             .history_for(&expanded.prepare_effects()[0], &mut advanced)
             .unwrap();
+        assert_eq!(accepted.threads().history_for(&prepare().prepare_effects()[0], &mut advanced).err(), Some(Error::Authority));
+        let mut expired_history = Time::default();
+        expired_history.0.set(expanded.prepare_effects()[0].valid_until());
+        assert_eq!(accepted.threads().history_for(&expanded.prepare_effects()[0], &mut expired_history).err(), Some(Error::Authority));
+
         assert_eq!(disclosed.len(), 2);
         assert_eq!(disclosed.last().unwrap().bytes, b"later");
         let leave = group_support::request(
@@ -1260,6 +1479,20 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             .await
             .unwrap();
         assert_eq!(left.threads().history().len(), 21);
+        assert_eq!(
+            left.threads()
+                .receive_group(
+                    &mut b.port(),
+                    &contacts("m1", &bstore),
+                    &source,
+                    &mut advanced,
+                    &wire
+                )
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
+
         assert_eq!(
             left.threads()
                 .send_group(
@@ -1432,6 +1665,13 @@ fn malformed_owned_checkpoints_and_locked_keys_fail_without_output() {
             .await
             .unwrap();
         let threads = Threads::load(a.binding.clone(), SLOT, &store).unwrap();
+        let original_lineage = a.directory.0.borrow()["alice"].clone();
+        let mut replacement = Fixture::new("alice", 8, a.directory.clone()).await;
+        assert_eq!(
+            threads.key_package(&mut replacement.port()).await.err(),
+            Some(Error::Authority)
+        );
+        a.directory.0.borrow_mut().insert("alice".into(), original_lineage);
         a.keys.lock();
         assert_eq!(
             threads.key_package(&mut a.port()).await.err(),

@@ -144,6 +144,8 @@ jobs:
       - run: cargo llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --lcov --output-path coverage.lcov
       - run: cargo llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --text --output-path coverage.txt
       - run: |
+          python3 .github/test-coverage-owner-contracts.py
+          python3 .github/check-coverage-owner-contracts.py dependency-metadata.json
           python3 .github/test-source-coverage.py
           python3 .github/check-source-coverage.py coverage.lcov coverage.json coverage.txt
       - uses: actions/upload-artifact@v4

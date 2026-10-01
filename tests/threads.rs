@@ -1,4 +1,7 @@
 //! Real OpenMLS and scoped Keys vectors. Test issuers are not production G3/G2.
+//! Large fixture futures are heap-pinned to fit the default browser Wasm stack.
+#[path = "support/binary_payload_refusals.rs"]
+mod binary_payload_refusals;
 #[path = "support/groups.rs"]
 mod group_support;
 mod support;
@@ -13,6 +16,12 @@ use support::{Guard, Machine, Time, create, machine, prf};
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 const SLOT: [u8; 32] = [17; 32];
+fn stage(name: &str) {
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::console_log!("{name}");
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = name;
+}
 #[derive(Clone, Default)]
 struct Directory(Rc<RefCell<BTreeMap<String, Lineage>>>);
 impl DeviceAuthority for Directory {
@@ -181,6 +190,10 @@ impl<A: cthr::keys::Custody, B: cthr::keys::Custody> cthr::keys::Custody for Mis
     }
 }
 struct MlsFixtureSigner<'a>(ckmg::Ed25519Signer<'a>);
+struct UpstreamGroup {
+    welcome: Vec<u8>,
+    storage: Vec<(Vec<u8>, Vec<u8>)>,
+}
 impl openmls_traits::signatures::Signer for MlsFixtureSigner<'_> {
     fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, openmls_traits::signatures::SignerError> {
         self.0
@@ -194,6 +207,7 @@ impl openmls_traits::signatures::Signer for MlsFixtureSigner<'_> {
 }
 struct Fixture {
     keys: Machine,
+    guard: Guard,
     handle: KeyHandle,
     binding: Binding,
     directory: Directory,
@@ -201,17 +215,21 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(member: &str, seed: u8, directory: Directory) -> Self {
+        Self::in_community("alpha", member, seed, directory).await
+    }
+    async fn in_community(community: &str, member: &str, seed: u8, directory: Directory) -> Self {
         let guard = Guard::default();
-        let binding = Binding::new("alpha", member).unwrap();
+        let binding = Binding::new(community, member).unwrap();
         let mut keys = machine(&support::Memory::default(), &Time::default(), &guard, seed);
         create(&mut keys, &guard, &prf(seed), &binding).await;
         let handle = keys.key(cthr::purpose()).await.unwrap();
         directory
             .0
             .borrow_mut()
-            .insert(member.into(), guard.0.borrow()["alpha"].clone());
+            .insert(member.into(), guard.0.borrow()[community].clone());
         Self {
             keys,
+            guard,
             handle,
             binding,
             directory,
@@ -239,6 +257,130 @@ impl Fixture {
                     .key_package()
                     .tls_serialize_detached()
                     .unwrap()
+            })
+            .await
+            .unwrap()
+    }
+    async fn upstream_invitation(
+        &mut self,
+        slot: [u8; 32],
+        identity: Vec<u8>,
+        packages: &[Vec<u8>],
+    ) -> Vec<u8> {
+        self.upstream_group(slot, identity, packages).await.welcome
+    }
+    async fn upstream_group(
+        &mut self,
+        slot: [u8; 32],
+        identity: Vec<u8>,
+        packages: &[Vec<u8>],
+    ) -> UpstreamGroup {
+        use openmls::prelude::*;
+        use openmls_traits::OpenMlsProvider;
+        use tls_codec::{Deserialize, Serialize};
+        let provider = openmls_rust_crypto::OpenMlsRustCrypto::default();
+        let packages: Vec<_> = packages
+            .iter()
+            .map(|wire| {
+                KeyPackageIn::tls_deserialize_exact(wire)
+                    .unwrap()
+                    .validate(provider.crypto(), ProtocolVersion::Mls10)
+                    .unwrap()
+            })
+            .collect();
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(identity).into(),
+            signature_key: self.handle.certificate().key.value().to_vec().into(),
+        };
+        self.keys
+            .with_ed25519_signer(&self.handle, |signer| {
+                let signer = MlsFixtureSigner(signer);
+                let config = MlsGroupCreateConfig::builder()
+                    .ciphersuite(Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519)
+                    .use_ratchet_tree_extension(true)
+                    .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
+                    .build();
+                let mut group = MlsGroup::new_with_group_id(
+                    &provider,
+                    &signer,
+                    &config,
+                    GroupId::from_slice(&slot),
+                    credential,
+                )
+                .unwrap();
+                let (_, welcome, _) = group.add_members(&provider, &signer, &packages).unwrap();
+                group.merge_pending_commit(&provider).unwrap();
+                UpstreamGroup {
+                    welcome: welcome.tls_serialize_detached().unwrap(),
+                    storage: provider
+                        .storage()
+                        .values
+                        .read()
+                        .unwrap()
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                }
+            })
+            .await
+            .unwrap()
+    }
+    async fn paired(&mut self, seed: u8) -> Fixture {
+        let mut keys = machine(
+            &support::Memory::default(),
+            &Time::default(),
+            &self.guard,
+            seed,
+        );
+        support::pair(&mut self.keys, &mut keys, &self.guard, &prf(seed)).await;
+        let handle = keys.key(cthr::purpose()).await.unwrap();
+        self.directory.0.borrow_mut().insert(
+            self.binding.member().into(),
+            self.guard.0.borrow()[self.binding.community()].clone(),
+        );
+        Fixture {
+            keys,
+            handle,
+            guard: self.guard.clone(),
+            binding: self.binding.clone(),
+            directory: self.directory.clone(),
+            seed,
+        }
+    }
+    async fn upstream_join_proposal(&mut self, slot: [u8; 32], epoch: u64) -> Vec<u8> {
+        use openmls::prelude::*;
+        use openmls_traits::OpenMlsProvider;
+        use tls_codec::Serialize;
+        let provider = openmls_rust_crypto::OpenMlsRustCrypto::default();
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(
+                serde_json::to_vec(self.handle.certificate()).unwrap(),
+            )
+            .into(),
+            signature_key: self.handle.certificate().key.value().to_vec().into(),
+        };
+        self.keys
+            .with_ed25519_signer(&self.handle, |signer| {
+                let signer = MlsFixtureSigner(signer);
+                let package = KeyPackage::builder()
+                    .build(
+                        Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519,
+                        &provider,
+                        &signer,
+                        credential,
+                    )
+                    .unwrap();
+                openmls::messages::external_proposals::JoinProposal::new::<
+                    <openmls_rust_crypto::OpenMlsRustCrypto as OpenMlsProvider>::StorageProvider,
+                >(
+                    package.key_package().clone(),
+                    GroupId::from_slice(&slot),
+                    epoch.into(),
+                    &signer,
+                )
+                .unwrap()
+                .tls_serialize_detached()
+                .unwrap()
             })
             .await
             .unwrap()
@@ -316,8 +458,9 @@ impl Fixture {
     }
     async fn store(&self) -> (Memory, Store<Memory>) {
         let backend = Memory::new();
-        let cipher = ckmg::passkey::store_cipher(&prf(self.seed), "alpha").unwrap();
-        let store = Store::create(backend.clone(), &cipher, "alpha")
+        let community = self.binding.community();
+        let cipher = ckmg::passkey::store_cipher(&prf(self.seed), community).unwrap();
+        let store = Store::create(backend.clone(), &cipher, community)
             .await
             .unwrap();
         (backend, store)
@@ -327,7 +470,7 @@ impl Fixture {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
-    block_on(async {
+    block_on(Box::pin(async {
         let directory = Directory::default();
         let mut a = Fixture::new("alice", 1, directory.clone()).await;
         let mut b = Fixture::new("bob", 2, directory.clone()).await;
@@ -344,6 +487,21 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
             .await
             .err(),
             Some(Error::Authority)
+        );
+        assert_eq!(
+            at.key_package(&mut b.port()).await.err(),
+            Some(Error::Scope)
+        );
+        let wrong_handle = a.keys.key(ctcs::purpose()).await.unwrap();
+        assert_eq!(
+            at.key_package(&mut KeyPort {
+                keys: &mut a.keys,
+                handle: &wrong_handle,
+                devices: &mut a.directory,
+            })
+            .await
+            .err(),
+            Some(Error::Scope)
         );
         let candidate = bt.key_package(&mut b.port()).await.unwrap();
         assert!(bstore.load_pending().unwrap().is_empty());
@@ -435,6 +593,21 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
         let Event::Invitation { welcome, .. } = &invitation.events()[0] else {
             panic!()
         };
+        let wrong_group = a
+            .upstream_invitation(
+                [18; 32],
+                serde_json::to_vec(a.handle.certificate()).unwrap(),
+                std::slice::from_ref(bytes),
+            )
+            .await;
+        assert_eq!(
+            package
+                .threads()
+                .join_direct(&mut b.port(), &mut grant, "alice", &wrong_group)
+                .await
+                .err(),
+            Some(Error::Scope)
+        );
         let joined = package
             .threads()
             .join_direct(&mut b.port(), &mut grant, "alice", welcome)
@@ -443,6 +616,75 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
             .commit(&mut b.port(), &mut Grant::new(), &mut bstore, [2; 32], &[])
             .await
             .unwrap();
+        let old_lineage = b.directory.0.borrow()["bob"].clone();
+        let mut replacement = Fixture::new("bob", 8, b.directory.clone()).await;
+        let mut checkpoint: serde_json::Value =
+            serde_json::from_slice(bstore.read("cthr", &SLOT).unwrap().unwrap()).unwrap();
+        checkpoint["certificate"] = serde_json::to_value(replacement.handle.certificate()).unwrap();
+        let mut replaced = copied_store(&b, &bstore).await;
+        put(
+            &mut replaced,
+            "cthr",
+            &SLOT,
+            &serde_json::to_vec(&checkpoint).unwrap(),
+            201,
+        )
+        .await;
+        assert_eq!(
+            Threads::load(b.binding.clone(), SLOT, &replaced)
+                .unwrap()
+                .send(&mut replacement.port(), &mut grant, b"old device tree")
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
+        b.directory.0.borrow_mut().insert("bob".into(), old_lineage);
+        let mut outsider = Fixture::new("joining", 9, directory.clone()).await;
+        let proposal = outsider
+            .upstream_join_proposal(SLOT, joined.threads().epoch().unwrap())
+            .await;
+        assert_eq!(
+            joined
+                .threads()
+                .receive(&mut b.port(), &mut grant, &proposal)
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
+        // Two genuinely paired, currently registered devices of the same member
+        // still cannot stand for two distinct direct-conversation participants.
+        // Import their real upstream provider as a damaged owner checkpoint.
+        let mut second_b = b.paired(11).await;
+        let package = second_b
+            .wire_package(serde_json::to_vec(second_b.handle.certificate()).unwrap())
+            .await;
+        let same_member = b
+            .upstream_group(
+                SLOT,
+                serde_json::to_vec(b.handle.certificate()).unwrap(),
+                &[package],
+            )
+            .await;
+        let mut checkpoint: serde_json::Value =
+            serde_json::from_slice(astore.read("cthr", &SLOT).unwrap().unwrap()).unwrap();
+        checkpoint["storage"] = serde_json::to_value(same_member.storage).unwrap();
+        let mut damaged = copied_store(&a, &astore).await;
+        put(
+            &mut damaged,
+            "cthr",
+            &SLOT,
+            &serde_json::to_vec(&checkpoint).unwrap(),
+            201,
+        )
+        .await;
+        assert_eq!(
+            Threads::load(a.binding.clone(), SLOT, &damaged)
+                .unwrap()
+                .send(&mut a.port(), &mut grant, b"one member twice")
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
         assert_eq!(joined.threads().epoch().unwrap(), 1);
         for (plaintext, expected) in [
             (Some(vec![]), Error::Limit),
@@ -497,6 +739,14 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
                 .is_err()
         );
         assert_eq!(invitation.threads().epoch().unwrap(), 1);
+        assert_eq!(
+            invitation
+                .threads()
+                .send(&mut a.port(), &mut grant, &vec![0; 1024 * 1024 / 2 + 1])
+                .await
+                .err(),
+            Some(Error::Limit)
+        );
         let large = invitation
             .threads()
             .send(&mut a.port(), &mut grant, &vec![255; 300_000])
@@ -614,6 +864,7 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
         assert!(accepted.outgoing().is_empty());
         let mut receipt = Receipt::from_committed(&receipts[0]);
         let id = receipt.message;
+        Box::pin(malformed_fork_receipt_refuses(&mut a, &astore, &receipt)).await;
         assert_eq!(
             sent.threads().acknowledge(&[0; 32], &receipt).err(),
             Some(Error::State)
@@ -670,13 +921,13 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
             .await
             .unwrap();
         assert_eq!(received.threads().history()[1].bytes, b"reply");
-    });
+    }));
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn candidates_refuse_cross_scope_and_changed_checkpoint() {
-    block_on(async {
+    block_on(Box::pin(async {
         let mut a = Fixture::new("alice", 1, Directory::default()).await;
         let (backend, mut store) = a.store().await;
         assert!(Threads::load(a.binding.clone(), [0; 32], &store).is_err());
@@ -794,13 +1045,14 @@ fn candidates_refuse_cross_scope_and_changed_checkpoint() {
             Threads::load(a.binding.clone(), SLOT, &store).err(),
             Some(Error::Storage)
         );
-    });
+    }));
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
-    block_on(async {
+    stage("fork fixture entered");
+    block_on(Box::pin(async {
         let directory = Directory::default();
         let mut a = Fixture::new("m0", 1, directory.clone()).await;
         let mut b = Fixture::new("m1", 2, directory.clone()).await;
@@ -934,7 +1186,51 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 .err(),
             Some(Error::Scope)
         );
+        let mut foreign = Fixture::in_community("beta", "m0", 5, Directory::default()).await;
+        let (_, foreign_store) = foreign.store().await;
+        let foreign_threads = Threads::load(foreign.binding.clone(), SLOT, &foreign_store).unwrap();
+        assert_eq!(
+            foreign_threads
+                .create_fork(&mut foreign.port(), &effects[0], &packages, &mut clock)
+                .await
+                .err(),
+            Some(Error::Scope)
+        );
         let mut outsider = Fixture::new("outsider", 4, a.directory.clone()).await;
+        // Maintained OpenMLS permits credential/application authorization to be
+        // supplied by the application. These are genuine MLS invitations with
+        // hostile application identities, not mocked cryptographic messages.
+        stage("fork hostile invitations");
+        for creator in [&mut foreign, &mut outsider] {
+            let identity = serde_json::to_vec(creator.handle.certificate()).unwrap();
+            let welcome = creator.upstream_invitation(SLOT, identity, &packages).await;
+            assert_eq!(
+                bp.threads()
+                    .join_fork(&mut b.port(), &effects[0], &welcome, &mut clock)
+                    .await
+                    .err(),
+                Some(Error::Authority)
+            );
+        }
+        for binding in [Binding::new("beta", "m2").unwrap(), b.binding.clone()] {
+            let mut certificate = c.handle.certificate().clone();
+            certificate.binding = binding;
+            let hostile = c
+                .wire_package(serde_json::to_vec(&certificate).unwrap())
+                .await;
+            let identity = serde_json::to_vec(a.handle.certificate()).unwrap();
+            let welcome = a
+                .upstream_invitation(SLOT, identity, &[packages[0].clone(), hostile])
+                .await;
+            assert_eq!(
+                bp.threads()
+                    .join_fork(&mut b.port(), &effects[0], &welcome, &mut clock)
+                    .await
+                    .err(),
+                Some(Error::Authority)
+            );
+        }
+        stage("fork hostile invitations refused");
         let (_, outside_store) = outsider.store().await;
         let outside = Threads::load(outsider.binding.clone(), SLOT, &outside_store).unwrap();
         assert_eq!(
@@ -1142,6 +1438,18 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             panic!()
         };
         assert_eq!(
+            wrong_slot
+                .join_fork(
+                    &mut a.port(),
+                    &prepare().prepare_effects()[0],
+                    welcome,
+                    &mut clock
+                )
+                .await
+                .err(),
+            Some(Error::Scope)
+        );
+        assert_eq!(
             bp.threads()
                 .join_direct(
                     &mut b.port(),
@@ -1297,8 +1605,24 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let contacts = |member: &str, store: &Store<Memory>| {
             ctcs::Contacts::load(Binding::new("alpha", member).unwrap(), store).unwrap()
         };
+        stage("fork baseline established");
         let mut at = joined.into_threads();
         let mut bt = bjoined.into_threads();
+        let proposal = outsider
+            .upstream_join_proposal(SLOT, bt.epoch().unwrap())
+            .await;
+        assert_eq!(
+            bt.receive_group(
+                &mut b.port(),
+                &contacts("m1", &bstore),
+                &source,
+                &mut clock,
+                &proposal
+            )
+            .await
+            .err(),
+            Some(Error::Authority)
+        );
         for (plaintext, expected) in [
             (Some(vec![]), Error::Limit),
             (Some(vec![7; 1024 * 1024 / 2 + 1]), Error::Limit),
@@ -1318,6 +1642,7 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 Some(expected)
             );
         }
+        stage("fork message roundtrips");
         for index in 0..policy.bands[0].burst {
             let sent = at
                 .send_group(
@@ -1665,13 +1990,839 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 .err(),
             Some(Error::Authority)
         );
+    }));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn fork_owner_checkpoint_boundaries() {
+    stage("checkpoint fixture entered");
+    block_on(Box::pin(async {
+        let directory = Directory::default();
+        let mut a = Fixture::new("m0", 1, directory.clone()).await;
+        let mut b = Fixture::new("m1", 2, directory.clone()).await;
+        let mut c = Fixture::new("m2", 3, directory).await;
+        let (_, mut astore) = a.store().await;
+        let (_, mut bstore) = b.store().await;
+        let (_, mut cstore) = c.store().await;
+        let mut packages = vec![];
+        for (fixture, store) in [(&mut b, &mut bstore), (&mut c, &mut cstore)] {
+            let threads = Threads::load(fixture.binding.clone(), SLOT, store).unwrap();
+            let committed = threads
+                .key_package(&mut fixture.port())
+                .await
+                .unwrap()
+                .commit(&mut fixture.port(), &mut Grant::new(), store, [1; 32], &[])
+                .await
+                .unwrap();
+            let Event::KeyPackage { bytes } = &committed.events()[0] else {
+                panic!()
+            };
+            packages.push(bytes.clone());
+        }
+        let empty = cgrp::Snapshot::empty("alpha".into());
+        let source = group_support::SignedPolicy::new(&group_support::policy());
+        let request = group_support::request(
+            &empty,
+            cgrp::Command::Create {
+                id: SLOT,
+                members: group_support::members(0, 3),
+                seed: false,
+            },
+            "m0",
+            group_support::members(0, 3),
+            false,
+            1000,
+        );
+        let prepare = || {
+            cgrp::prepare(
+                &empty,
+                &request,
+                &source,
+                &group_support::TestAuthority,
+                1000,
+                10,
+            )
+            .unwrap()
+        };
+        let groups = prepare();
+        let effects = groups.prepare_effects();
+        let mut clock = Time::default();
+        let candidate = Threads::load(a.binding.clone(), SLOT, &astore)
+            .unwrap()
+            .create_fork(&mut a.port(), &effects[0], &packages, &mut clock)
+            .await
+            .unwrap();
+        drop(effects);
+        let (joined, state, _) = candidate
+            .commit_groups(
+                &mut a.port(),
+                groups,
+                &mut astore,
+                [2; 32],
+                &source,
+                &mut clock,
+            )
+            .await
+            .unwrap();
+        let Event::Invitation { welcome, .. } = &joined.events()[0] else {
+            panic!()
+        };
+        let groups = prepare();
+        let effects = groups.prepare_effects();
+        let candidate = Threads::load(b.binding.clone(), SLOT, &bstore)
+            .unwrap()
+            .join_fork(&mut b.port(), &effects[0], welcome, &mut clock)
+            .await
+            .unwrap();
+        drop(effects);
+        candidate
+            .commit_groups(
+                &mut b.port(),
+                groups,
+                &mut bstore,
+                [2; 32],
+                &source,
+                &mut clock,
+            )
+            .await
+            .unwrap();
+        stage("checkpoint baseline established");
+        Box::pin(fork_checkpoint_refusals(
+            &mut a, &mut b, &astore, &bstore, &state, &source,
+        ))
+        .await;
+        stage("checkpoint refusals complete");
+    }));
+}
+
+// Import actual committed owner records into a separate encrypted Store. This
+// exercises restore and cross-owner publication inputs without exposing or
+// mutating a private candidate or replacing an owner state machine.
+async fn copied_store(fixture: &Fixture, source: &Store<Memory>) -> Store<Memory> {
+    let (_, mut target) = fixture.store().await;
+    let changes: Vec<_> = [
+        ("cthr", SLOT.as_slice()),
+        ("cgrp", b"snapshot.v1"),
+        ("ctcs", b"journal.v1"),
+    ]
+    .into_iter()
+    .filter_map(|(owner, key)| {
+        source
+            .read(owner, key)
+            .unwrap()
+            .map(|value| cwst::Change::Put { owner, key, value })
+    })
+    .collect();
+    target.commit(0, [200; 32], &changes, &[]).await.unwrap();
+    target
+}
+
+async fn put(store: &mut Store<Memory>, owner: &str, key: &[u8], value: &[u8], op: u8) {
+    store
+        .commit(
+            store.version().unwrap(),
+            [op; 32],
+            &[cwst::Change::Put { owner, key, value }],
+            &[],
+        )
+        .await
+        .unwrap();
+}
+
+// Real persistence for Groups-only fixture transitions (opening and expiration
+// do not yet have a Threads engine). Enforce predecessor revision, then use the
+// actual encrypted Store CAS; never fabricate a prepared or committed effect.
+struct GroupsStore<'a>(&'a mut Store<Memory>);
+impl cgrp::Persistence for GroupsStore<'_> {
+    fn commit<'a>(
+        &'a mut self,
+        expected: u64,
+        snapshot: &'a cgrp::Snapshot,
+        _: &'a [cgrp::Effect],
+    ) -> cgrp::CommitFuture<'a> {
+        Box::pin(async move {
+            if !self.0.is_scope(snapshot.community()) {
+                return Err(cgrp::Error::Authority);
+            }
+            let bytes = self
+                .0
+                .read("cgrp", b"snapshot.v1")
+                .map_err(|_| cgrp::Error::Reconcile)?;
+            let revision = match bytes {
+                Some(bytes) => postcard::from_bytes::<cgrp::Snapshot>(bytes)
+                    .map_err(|_| cgrp::Error::Invalid)?
+                    .revision(),
+                None => 0,
+            };
+            if revision != expected {
+                return Ok(cgrp::Commit::Conflict);
+            }
+            let bytes = postcard::to_allocvec(snapshot).map_err(|_| cgrp::Error::Invalid)?;
+            let operation = *ckmg::hash(&bytes).value();
+            self.0
+                .commit(
+                    self.0.version().map_err(|_| cgrp::Error::Reconcile)?,
+                    operation,
+                    &[cwst::Change::Put {
+                        owner: "cgrp",
+                        key: b"snapshot.v1",
+                        value: &bytes,
+                    }],
+                    &[],
+                )
+                .await
+                .map_err(|_| cgrp::Error::Reconcile)?;
+            Ok(cgrp::Commit::Applied)
+        })
+    }
+}
+
+async fn malformed_fork_receipt_refuses(
+    a: &mut Fixture,
+    source: &Store<Memory>,
+    receipt: &Receipt,
+) {
+    let policy = group_support::SignedPolicy::new(&group_support::policy());
+    let mut target = copied_store(a, source).await;
+    let empty = cgrp::Snapshot::empty("alpha".into());
+    let request = group_support::request(
+        &empty,
+        cgrp::Command::Create {
+            id: SLOT,
+            members: group_support::members(0, 3),
+            seed: false,
+        },
+        "m0",
+        group_support::members(0, 3),
+        false,
+        1000,
+    );
+    let (created, _) = cgrp::prepare(
+        &empty,
+        &request,
+        &policy,
+        &group_support::TestAuthority,
+        1000,
+        10,
+    )
+    .unwrap()
+    .persist(&mut GroupsStore(&mut target), 1000)
+    .await
+    .unwrap();
+    let request = group_support::request(
+        &created,
+        cgrp::Command::Leave { group: SLOT },
+        "m0",
+        group_support::members(0, 1),
+        false,
+        1000,
+    );
+    let leave = cgrp::prepare(
+        &created,
+        &request,
+        &policy,
+        &group_support::TestAuthority,
+        1000,
+        10,
+    )
+    .unwrap();
+    let effects = leave.prepare_effects();
+    let effect = &effects[0];
+    let cgrp::Effect::Membership {
+        group,
+        lineage,
+        parents,
+        members,
+        level,
+        policy_epoch,
+        revision,
+    } = effect.event()
+    else {
+        panic!()
+    };
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(source.read("cthr", &SLOT).unwrap().unwrap()).unwrap();
+    // Malformed persisted data combines a real pending direct receipt with a
+    // different genuine Groups membership. The public ACK preparation method
+    // must not make that hybrid snapshot publishable as a group candidate.
+    snapshot["fork"] = serde_json::json!({
+        "group": group, "lineage": lineage, "parents": parents, "members": members,
+        "roster": [a.binding.member(), receipt.recipient.as_str()], "level": level,
+        "band": effect.policy_band(), "policy_epoch": policy_epoch,
+        "policy_until": effect.policy_valid_until(), "preparation_until": effect.valid_until(),
+        "revision": revision, "last_time": 1000, "pace": {},
     });
+    drop(effects);
+    leave
+        .persist(&mut GroupsStore(&mut target), 1000)
+        .await
+        .unwrap();
+    put(
+        &mut target,
+        "cthr",
+        &SLOT,
+        &serde_json::to_vec(&snapshot).unwrap(),
+        201,
+    )
+    .await;
+    let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+    let held = threads.acknowledge(&receipt.message, receipt).unwrap();
+    let before = target.version().unwrap();
+    assert_eq!(
+        held.commit_group(
+            &mut a.port(),
+            &mut target,
+            [202; 32],
+            &policy,
+            &mut Time::default()
+        )
+        .await
+        .err(),
+        Some(Error::Authority)
+    );
+    assert_eq!(target.version().unwrap(), before);
+    assert!(target.load_pending().unwrap().is_empty());
+}
+
+async fn owner_effect_refusals(
+    a: &mut Fixture,
+    astore: &Store<Memory>,
+    state: &cgrp::Snapshot,
+    source: &group_support::SignedPolicy,
+) {
+    let mut group_store = copied_store(a, astore).await;
+    let add = group_support::request(
+        state,
+        cgrp::Command::Fork {
+            id: [18; 32],
+            parents: vec![SLOT],
+            members: group_support::members(0, 13),
+            kind: cgrp::ForkKind::Add,
+        },
+        "m0",
+        group_support::members(0, 13),
+        false,
+        1000,
+    );
+    let (expanded, _) = cgrp::prepare(state, &add, source, &group_support::TestAuthority, 1000, 10)
+        .unwrap()
+        .persist(&mut GroupsStore(&mut group_store), 1000)
+        .await
+        .unwrap();
+    let open = group_support::request(
+        &expanded,
+        cgrp::Command::Fork {
+            id: [19; 32],
+            parents: vec![[18; 32]],
+            members: group_support::members(0, 13),
+            kind: cgrp::ForkKind::Open,
+        },
+        "m0",
+        group_support::members(0, 13),
+        true,
+        1000,
+    );
+    let (opened, _) = cgrp::prepare(
+        &expanded,
+        &open,
+        source,
+        &group_support::TestAuthority,
+        1000,
+        10,
+    )
+    .unwrap()
+    .persist(&mut GroupsStore(&mut group_store), 1000)
+    .await
+    .unwrap();
+    let deadline = 1000 + group_support::policy().open_seconds;
+    let request = group_support::request(
+        &opened,
+        cgrp::Command::Tick,
+        "m0",
+        Default::default(),
+        false,
+        deadline,
+    );
+    let expired = cgrp::prepare(
+        &opened,
+        &request,
+        source,
+        &group_support::TestAuthority,
+        deadline,
+        10,
+    )
+    .unwrap();
+    let effects = expired.prepare_effects();
+    let nonmembership = effects
+        .iter()
+        .find(|effect| matches!(effect.event(), cgrp::Effect::ConsentLapsed { .. }))
+        .unwrap();
+    let threads = Threads::load(a.binding.clone(), SLOT, astore).unwrap();
+    let mut clock = Time::default();
+    clock.0.set(deadline);
+    assert_eq!(
+        threads.history_for(nonmembership, &mut clock).err(),
+        Some(Error::Authority)
+    );
+    let (_, store) = a.store().await;
+    let empty = Threads::load(a.binding.clone(), SLOT, &store).unwrap();
+    assert_eq!(
+        empty
+            .create_fork(&mut a.port(), nonmembership, &[], &mut clock)
+            .await
+            .err(),
+        Some(Error::Authority)
+    );
+
+    let foreign = Fixture::in_community("beta", "m0", 10, Directory::default()).await;
+    let (_, mut store) = foreign.store().await;
+    let mut checkpoint: serde_json::Value =
+        serde_json::from_slice(astore.read("cthr", &SLOT).unwrap().unwrap()).unwrap();
+    checkpoint["binding"] = serde_json::to_value(&foreign.binding).unwrap();
+    put(
+        &mut store,
+        "cthr",
+        &SLOT,
+        &serde_json::to_vec(&checkpoint).unwrap(),
+        200,
+    )
+    .await;
+    let foreign_threads = Threads::load(foreign.binding.clone(), SLOT, &store).unwrap();
+    let membership = effects
+        .iter()
+        .find(|effect| matches!(effect.event(), cgrp::Effect::Membership { .. }))
+        .unwrap();
+    assert_eq!(
+        foreign_threads.history_for(membership, &mut clock).err(),
+        Some(Error::Authority)
+    );
+}
+
+async fn fork_checkpoint_refusals(
+    a: &mut Fixture,
+    b: &mut Fixture,
+    astore: &Store<Memory>,
+    bstore: &Store<Memory>,
+    state: &cgrp::Snapshot,
+    source: &group_support::SignedPolicy,
+) {
+    let mut clock = Time::default();
+    let leave_request = group_support::request(
+        state,
+        cgrp::Command::Leave { group: SLOT },
+        "m1",
+        group_support::members(1, 2),
+        false,
+        1000,
+    );
+    let leave = || {
+        cgrp::prepare(
+            state,
+            &leave_request,
+            source,
+            &group_support::TestAuthority,
+            1000,
+            10,
+        )
+        .unwrap()
+    };
+    let groups = leave();
+    let effects = groups.prepare_effects();
+    let original: serde_json::Value =
+        serde_json::from_slice(astore.read("cthr", &SLOT).unwrap().unwrap()).unwrap();
+    Box::pin(owner_effect_refusals(a, astore, state, source)).await;
+    let without_local = ["m0", "m2", "m3"].into_iter().map(str::to_owned).collect();
+    let without_local_request = group_support::request(
+        state,
+        cgrp::Command::Fork {
+            id: [18; 32],
+            parents: vec![SLOT],
+            members: without_local,
+            kind: cgrp::ForkKind::Add,
+        },
+        "m0",
+        ["m0", "m2", "m3"].into_iter().map(str::to_owned).collect(),
+        false,
+        1000,
+    );
+    let without_local = cgrp::prepare(
+        state,
+        &without_local_request,
+        source,
+        &group_support::TestAuthority,
+        1000,
+        10,
+    )
+    .unwrap();
+    assert_eq!(
+        Threads::load(b.binding.clone(), SLOT, bstore)
+            .unwrap()
+            .history_for(&without_local.prepare_effects()[0], &mut clock)
+            .err(),
+        Some(Error::Authority)
+    );
+
+    // Same event contents do not authorize swapping in another community's
+    // genuine prepared owner transaction.
+    let foreign_source =
+        group_support::SignedPolicy::for_community("beta", &group_support::policy());
+    let foreign_empty = cgrp::Snapshot::empty("beta".into());
+    let create = group_support::request(
+        &foreign_empty,
+        cgrp::Command::Create {
+            id: SLOT,
+            members: group_support::members(0, 3),
+            seed: false,
+        },
+        "m0",
+        group_support::members(0, 3),
+        false,
+        1000,
+    );
+    let foreign = Fixture::in_community("beta", "m0", 10, Directory::default()).await;
+    let (_, mut foreign_store) = foreign.store().await;
+    let (foreign_state, _) = cgrp::prepare(
+        &foreign_empty,
+        &create,
+        &foreign_source,
+        &group_support::TestAuthority,
+        1000,
+        10,
+    )
+    .unwrap()
+    .persist(&mut GroupsStore(&mut foreign_store), 1000)
+    .await
+    .unwrap();
+    let foreign_leave = group_support::request(
+        &foreign_state,
+        cgrp::Command::Leave { group: SLOT },
+        "m1",
+        group_support::members(1, 2),
+        false,
+        1000,
+    );
+    let foreign_groups = cgrp::prepare(
+        &foreign_state,
+        &foreign_leave,
+        &foreign_source,
+        &group_support::TestAuthority,
+        1000,
+        10,
+    )
+    .unwrap();
+    let mut target = copied_store(a, astore).await;
+    let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+    let held = threads
+        .update_fork(&mut a.port(), &effects[0], &mut clock)
+        .await
+        .unwrap();
+    assert_eq!(
+        held.commit_groups(
+            &mut a.port(),
+            foreign_groups,
+            &mut target,
+            [201; 32],
+            source,
+            &mut clock
+        )
+        .await
+        .err(),
+        Some(Error::Storage)
+    );
+
+    for (field, value) in [
+        ("lineage", serde_json::to_value([18u8; 32]).unwrap()),
+        ("parents", serde_json::to_value(vec![[18u8; 32]]).unwrap()),
+        ("members", serde_json::json!(["m0", "m1"])),
+    ] {
+        let mut changed = original.clone();
+        changed["fork"][field] = value;
+        let mut target = copied_store(a, astore).await;
+        put(
+            &mut target,
+            "cthr",
+            &SLOT,
+            &serde_json::to_vec(&changed).unwrap(),
+            201,
+        )
+        .await;
+        let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+        assert_eq!(
+            threads
+                .update_fork(&mut a.port(), &effects[0], &mut clock)
+                .await
+                .err(),
+            Some(Error::Authority),
+            "corrupt fork {field}"
+        );
+    }
+
+    let mut target = copied_store(a, astore).await;
+    let mut changed = original.clone();
+    changed["fork"]["group"] = serde_json::to_value([18u8; 32]).unwrap();
+    put(
+        &mut target,
+        "cthr",
+        &SLOT,
+        &serde_json::to_vec(&changed).unwrap(),
+        201,
+    )
+    .await;
+    let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+    let contacts = ctcs::Contacts::load(a.binding.clone(), &target).unwrap();
+    assert_eq!(
+        threads
+            .send_group(&mut a.port(), &contacts, source, &mut clock, b"wrong group")
+            .await
+            .err(),
+        Some(Error::Scope)
+    );
+
+    // The outer checkpoint can name a currently valid replacement device while
+    // its real MLS tree still contains the original device. Neither is enough
+    // to authorize continuation on the other device's ratchet.
+    let old_lineage = a.directory.0.borrow()["m0"].clone();
+    let mut replacement = Fixture::new("m0", 8, a.directory.clone()).await;
+    let mut changed = original.clone();
+    changed["certificate"] = serde_json::to_value(replacement.handle.certificate()).unwrap();
+    let mut target = copied_store(a, astore).await;
+    put(
+        &mut target,
+        "cthr",
+        &SLOT,
+        &serde_json::to_vec(&changed).unwrap(),
+        201,
+    )
+    .await;
+    let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+    let contacts = ctcs::Contacts::load(a.binding.clone(), &target).unwrap();
+    assert_eq!(
+        threads
+            .send_group(
+                &mut replacement.port(),
+                &contacts,
+                source,
+                &mut clock,
+                b"replacement device"
+            )
+            .await
+            .err(),
+        Some(Error::Authority)
+    );
+    a.directory.0.borrow_mut().insert("m0".into(), old_lineage);
+
+    let contacts_wrong_owner = ctcs::Contacts::load(b.binding.clone(), bstore).unwrap();
+    assert_eq!(
+        Threads::load(a.binding.clone(), SLOT, astore)
+            .unwrap()
+            .send_group(
+                &mut a.port(),
+                &contacts_wrong_owner,
+                source,
+                &mut clock,
+                b"wrong owner"
+            )
+            .await
+            .err(),
+        Some(Error::Conflict)
+    );
+
+    // Groups bytes are untrusted restored data. The actual Groups candidate is
+    // valid, but its checkpoint predecessor must also decode and match.
+    for bytes in [
+        b"invalid".to_vec(),
+        postcard::to_allocvec(&cgrp::Snapshot::empty("alpha".into())).unwrap(),
+    ] {
+        let mut target = copied_store(a, astore).await;
+        put(&mut target, "cgrp", b"snapshot.v1", &bytes, 201).await;
+        let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+        let held = threads
+            .update_fork(&mut a.port(), &effects[0], &mut clock)
+            .await
+            .unwrap();
+        let before = target.version().unwrap();
+        assert_eq!(
+            held.commit_groups(
+                &mut a.port(),
+                leave(),
+                &mut target,
+                [202; 32],
+                source,
+                &mut clock
+            )
+            .await
+            .err(),
+            Some(Error::Storage)
+        );
+        assert_eq!(target.version().unwrap(), before);
+        assert!(target.load_pending().unwrap().is_empty());
+    }
+
+    // A separate real Store writer wins after preparation. The combined Groups
+    // and MLS transaction must expose neither history nor an output on CAS loss.
+    let backend = Memory::new();
+    let cipher = ckmg::passkey::store_cipher(&prf(a.seed), "alpha").unwrap();
+    let mut target = Store::create(backend.clone(), &cipher, "alpha")
+        .await
+        .unwrap();
+    let groups_bytes = astore.read("cgrp", b"snapshot.v1").unwrap().unwrap();
+    target
+        .commit(
+            0,
+            [200; 32],
+            &[
+                cwst::Change::Put {
+                    owner: "cthr",
+                    key: &SLOT,
+                    value: astore.read("cthr", &SLOT).unwrap().unwrap(),
+                },
+                cwst::Change::Put {
+                    owner: "cgrp",
+                    key: b"snapshot.v1",
+                    value: groups_bytes,
+                },
+            ],
+            &[],
+        )
+        .await
+        .unwrap();
+    let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+    let held = threads
+        .update_fork(&mut a.port(), &effects[0], &mut clock)
+        .await
+        .unwrap();
+    let mut competing = Store::open(backend.clone(), &cipher, "alpha")
+        .await
+        .unwrap();
+    put(&mut competing, "fixture", b"writer", b"won", 201).await;
+    assert_eq!(
+        held.commit_groups(
+            &mut a.port(),
+            leave(),
+            &mut target,
+            [202; 32],
+            source,
+            &mut clock
+        )
+        .await
+        .err(),
+        Some(Error::Storage)
+    );
+    let reopened = Store::open(backend, &cipher, "alpha").await.unwrap();
+    assert_eq!(
+        reopened.read("cgrp", b"snapshot.v1").unwrap().unwrap(),
+        groups_bytes
+    );
+    assert!(reopened.load_pending().unwrap().is_empty());
+
+    // Signed departure changes the active member set while retaining the real
+    // MLS roster. A cryptographically valid application from the departed member
+    // cannot pass the owner membership check.
+    let mut target = copied_store(a, astore).await;
+    let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+    let (changed, departed_state, _) = threads
+        .update_fork(&mut a.port(), &effects[0], &mut clock)
+        .await
+        .unwrap()
+        .commit_groups(
+            &mut a.port(),
+            leave(),
+            &mut target,
+            [201; 32],
+            source,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    let wire = b.upstream_message(bstore, Some(b"after departure")).await;
+    let contacts = ctcs::Contacts::load(a.binding.clone(), &target).unwrap();
+    assert_eq!(
+        changed
+            .threads()
+            .receive_group(&mut a.port(), &contacts, source, &mut clock, &wire)
+            .await
+            .err(),
+        Some(Error::Authority)
+    );
+    let sent = changed
+        .threads()
+        .send_group(
+            &mut a.port(),
+            &contacts,
+            source,
+            &mut clock,
+            b"remaining peers",
+        )
+        .await
+        .unwrap()
+        .commit_group(&mut a.port(), &mut target, [202; 32], source, &mut clock)
+        .await
+        .unwrap();
+    assert_eq!(sent.outgoing()[0].recipients(), vec!["m2"]);
+
+    // An independently valid, but inconsistent owner checkpoint cannot authorize
+    // the pending message. Community and membership are both rechecked.
+    for bytes in [
+        postcard::to_allocvec(&cgrp::Snapshot::empty("beta".into())).unwrap(),
+        postcard::to_allocvec(&departed_state).unwrap(),
+    ] {
+        let mut target = copied_store(a, astore).await;
+        put(&mut target, "cgrp", b"snapshot.v1", &bytes, 201).await;
+        let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
+        let contacts = ctcs::Contacts::load(a.binding.clone(), &target).unwrap();
+        let held = threads
+            .send_group(
+                &mut a.port(),
+                &contacts,
+                source,
+                &mut clock,
+                b"mismatched owner state",
+            )
+            .await
+            .unwrap();
+        let before = target.version().unwrap();
+        assert_eq!(
+            held.commit_group(&mut a.port(), &mut target, [202; 32], source, &mut clock)
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
+        assert_eq!(target.version().unwrap(), before);
+        assert!(target.load_pending().unwrap().is_empty());
+    }
+
+    // Same-version stores from different views cannot bypass the publication
+    // check merely because the numeric version happens to agree.
+    let mut unblocked = copied_store(a, astore).await;
+    put(&mut unblocked, "fixture", b"writer", b"other", 201).await;
+    let mut blocked = copied_store(a, astore).await;
+    a.block("m2", &mut blocked, 201).await;
+    assert_eq!(unblocked.version().unwrap(), blocked.version().unwrap());
+    let threads = Threads::load(a.binding.clone(), SLOT, &unblocked).unwrap();
+    let contacts = ctcs::Contacts::load(a.binding.clone(), &unblocked).unwrap();
+    let held = threads
+        .send_group(
+            &mut a.port(),
+            &contacts,
+            source,
+            &mut clock,
+            b"blocked view",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        held.commit_group(&mut a.port(), &mut blocked, [202; 32], source, &mut clock)
+            .await
+            .err(),
+        Some(Error::Authority)
+    );
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn malformed_owned_checkpoints_and_locked_keys_fail_without_output() {
-    block_on(async {
+    block_on(Box::pin(async {
         let mut a = Fixture::new("alice", 1, Directory::default()).await;
         let (_, mut store) = a.store().await;
         let empty = Threads::load(a.binding.clone(), SLOT, &store).unwrap();
@@ -1748,5 +2899,5 @@ fn malformed_owned_checkpoints_and_locked_keys_fail_without_output() {
             Some(Error::Authority)
         );
         assert_eq!(package.into_threads().history().len(), 0);
-    });
+    }));
 }

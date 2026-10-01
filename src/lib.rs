@@ -14,7 +14,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 const OWNER: &str = "cthr";
 const MAX_WIRE: usize = 1024 * 1024;
-const MAX_CHECKPOINT: usize = 8 * MAX_WIRE;
+const MAX_CHECKPOINT: usize = cwst::MAX_VALUE_BYTES;
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -320,12 +320,16 @@ impl Committed {
 struct Working(OpenMlsRustCrypto);
 impl Drop for Working {
     fn drop(&mut self) {
-        if let Ok(mut storage) = self.0.storage().values.write() {
-            for value in storage.values_mut() {
-                value.zeroize();
-            }
-            storage.clear();
+        let mut storage = self
+            .0
+            .storage()
+            .values
+            .write()
+            .expect("private provider lock has no external guard or callback");
+        for value in storage.values_mut() {
+            value.zeroize();
         }
+        storage.clear();
     }
 }
 impl Threads {
@@ -333,16 +337,13 @@ impl Threads {
         if slot == [0; 32] || !store.is_scope(binding.community()) {
             return Err(Error::Scope);
         }
-        let expected = store.version().map_err(|_| Error::Storage)?;
+        let expected = store.version().map_err(storage_error)?;
         let base = store
             .read(OWNER, &slot)
-            .map_err(|_| Error::Storage)?
+            .expect("version checked the immutable store and fixed-size owner key")
             .map(|bytes| Zeroizing::new(bytes.to_vec()));
         let snapshot = if let Some(bytes) = &base {
-            if bytes.len() > MAX_CHECKPOINT {
-                return Err(Error::Limit);
-            }
-            let snapshot: Snapshot = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
+            let snapshot: Snapshot = serde_json::from_slice(bytes).map_err(encoding_error)?;
             if snapshot.version != 1 || snapshot.binding != binding || snapshot.slot != slot {
                 return Err(Error::Scope);
             }
@@ -387,7 +388,7 @@ impl Threads {
                 .storage()
                 .values
                 .write()
-                .map_err(|_| Error::Storage)?;
+                .expect("private provider lock has no external guard or callback");
             for (key, value) in &self.snapshot.storage {
                 if storage.insert(key.clone(), value.clone()).is_some() {
                     return Err(Error::Encoding);
@@ -399,7 +400,7 @@ impl Threads {
     fn group(&self, working: &Working) -> Result<MlsGroup> {
         let id = self.snapshot.group.as_ref().ok_or(Error::State)?;
         MlsGroup::load(working.0.storage(), &GroupId::from_slice(id))
-            .map_err(|_| Error::Crypto)?
+            .map_err(crypto_error)?
             .ok_or(Error::State)
     }
     async fn local(&self, keys: &mut impl Custody) -> Result<KeyCertificate> {
@@ -432,7 +433,7 @@ impl Threads {
             .storage()
             .values
             .read()
-            .map_err(|_| Error::Storage)?
+            .expect("private provider lock has no external guard or callback")
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -456,10 +457,10 @@ impl Threads {
                 check_signer(&signer, &cert)?;
                 KeyPackage::builder()
                     .build(SUITE, &working.0, &ScopedSigner(signer), credential)
-                    .map_err(|_| Error::Crypto)?
+                    .map_err(crypto_error)?
                     .key_package()
                     .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)
+                    .map_err(encoding_error)
             })
             .await?;
         self.candidate(
@@ -493,9 +494,9 @@ impl Threads {
         bounded_wire(package)?;
         let working = self.working()?;
         let package = KeyPackageIn::tls_deserialize_exact(package)
-            .map_err(|_| Error::Encoding)?
+            .map_err(encoding_error)?
             .validate(working.0.crypto(), ProtocolVersion::Mls10)
-            .map_err(|_| Error::Crypto)?;
+            .map_err(crypto_error)?;
         let peer_cert = decode_credential(
             package.leaf_node().credential(),
             package.leaf_node().signature_key().as_slice(),
@@ -514,19 +515,15 @@ impl Threads {
                     GroupId::from_slice(&self.snapshot.slot),
                     credential,
                 )
-                .map_err(|_| Error::Crypto)?;
+                .map_err(crypto_error)?;
                 let (commit, welcome, _) = group
                     .add_members(&working.0, &signer, &[package])
-                    .map_err(|_| Error::Crypto)?;
-                let commit = commit
-                    .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)?;
-                let welcome = welcome
-                    .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)?;
+                    .map_err(crypto_error)?;
+                let commit = commit.tls_serialize_detached().map_err(encoding_error)?;
+                let welcome = welcome.tls_serialize_detached().map_err(encoding_error)?;
                 group
                     .merge_pending_commit(&working.0)
-                    .map_err(|_| Error::Crypto)?;
+                    .map_err(crypto_error)?;
                 Ok((group, commit, welcome))
             })
             .await?;
@@ -565,13 +562,13 @@ impl Threads {
         let working = self.working()?;
         let staged =
             StagedWelcome::new_from_welcome(&working.0, config().join_config(), welcome, None)
-                .map_err(|_| Error::Crypto)?;
-        let sender = staged.welcome_sender().map_err(|_| Error::Crypto)?;
+                .map_err(crypto_error)?;
+        let sender = staged.welcome_sender().map_err(crypto_error)?;
         let sender_cert =
             decode_credential(sender.credential(), sender.signature_key().as_slice())?;
         exact_peer(&cert.binding, peer, &sender_cert)?;
         keys.verify(&sender_cert).await?;
-        let group = staged.into_group(&working.0).map_err(|_| Error::Crypto)?;
+        let group = staged.into_group(&working.0).map_err(crypto_error)?;
         self.verify_roster(keys, &group, &cert, peer).await?;
         self.candidate(
             &working,
@@ -632,9 +629,9 @@ impl Threads {
                 check_signer(&signer, &cert)?;
                 group
                     .create_message(&working.0, &ScopedSigner(signer), bytes)
-                    .map_err(|_| Error::Crypto)?
+                    .map_err(crypto_error)?
                     .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)
+                    .map_err(encoding_error)
             })
             .await?;
         let id = *ckmg::hash(&wire).value();
@@ -699,13 +696,13 @@ impl Threads {
             .await?;
         let message = parse(wire)?
             .try_into_protocol_message()
-            .map_err(|_| Error::Encoding)?;
+            .map_err(encoding_error)?;
         let working = self.working()?;
         let mut group = self.group(&working)?;
         self.verify_roster(keys, &group, &cert, peer).await?;
         let processed = group
             .process_message(&working.0, message)
-            .map_err(|_| Error::Crypto)?;
+            .map_err(crypto_error)?;
         let sender = match processed.sender() {
             Sender::Member(index) => group.member_at(*index).ok_or(Error::Authority)?,
             _ => return Err(Error::Authority),
@@ -805,13 +802,12 @@ impl Candidate {
         }
         if store
             .read(OWNER, &self.snapshot.slot)
-            .map_err(|_| Error::Storage)?
+            .map_err(storage_error)?
             != self.base.as_ref().map(|bytes| bytes.as_slice())
         {
             return Err(Error::Conflict);
         }
-        let bytes =
-            Zeroizing::new(serde_json::to_vec(&self.snapshot).map_err(|_| Error::Encoding)?);
+        let bytes = Zeroizing::new(serde_json::to_vec(&self.snapshot).map_err(encoding_error)?);
         if bytes.len() > MAX_CHECKPOINT {
             return Err(Error::Limit);
         }
@@ -835,10 +831,10 @@ impl Candidate {
         });
         let mut outputs = vec![];
         for (index, event) in self.events.iter().enumerate() {
-            let bytes = serde_json::to_vec(event).map_err(|_| Error::Encoding)?;
+            let bytes = serde_json::to_vec(event).map_err(encoding_error)?;
             let id = *ckmg::hash(
                 &serde_json::to_vec(&("cthr.output.v1", operation, index, &bytes))
-                    .map_err(|_| Error::Encoding)?,
+                    .map_err(encoding_error)?,
             )
             .value();
             outputs.push(Output { id, bytes });
@@ -846,7 +842,7 @@ impl Candidate {
         let expected = store
             .commit(self.expected, operation, &changes, &outputs)
             .await
-            .map_err(|_| Error::Storage)?;
+            .map_err(storage_error)?;
         Ok(Committed {
             threads: Threads {
                 snapshot: self.snapshot,
@@ -866,18 +862,16 @@ fn config() -> MlsGroupCreateConfig {
 }
 fn credential(cert: &KeyCertificate) -> Result<CredentialWithKey> {
     Ok(CredentialWithKey {
-        credential: BasicCredential::new(serde_json::to_vec(cert).map_err(|_| Error::Encoding)?)
-            .into(),
+        credential: BasicCredential::new(serde_json::to_vec(cert).map_err(encoding_error)?).into(),
         signature_key: cert.key.value().to_vec().into(),
     })
 }
 fn decode_credential(credential: &Credential, key: &[u8]) -> Result<KeyCertificate> {
-    let basic = BasicCredential::try_from(credential.clone()).map_err(|_| Error::Encoding)?;
+    let basic = BasicCredential::try_from(credential.clone()).map_err(encoding_error)?;
     if basic.identity().len() > 16384 {
         return Err(Error::Limit);
     }
-    let cert: KeyCertificate =
-        serde_json::from_slice(basic.identity()).map_err(|_| Error::Encoding)?;
+    let cert: KeyCertificate = serde_json::from_slice(basic.identity()).map_err(encoding_error)?;
     if cert.key.value().as_slice() != key || cert.purpose != purpose() {
         return Err(Error::Authority);
     }
@@ -912,5 +906,19 @@ fn bounded_wire(wire: &[u8]) -> Result<()> {
 }
 fn parse(wire: &[u8]) -> Result<MlsMessageIn> {
     bounded_wire(wire)?;
-    MlsMessageIn::tls_deserialize_exact(wire).map_err(|_| Error::Encoding)
+    MlsMessageIn::tls_deserialize_exact(wire).map_err(encoding_error)
+}
+
+// Coarse upstream failure classification is shared across the real engine paths.
+fn crypto_error<E>(_: E) -> Error {
+    Error::Crypto
+}
+fn encoding_error<E>(_: E) -> Error {
+    Error::Encoding
+}
+fn storage_error<E>(_: E) -> Error {
+    Error::Storage
+}
+fn authority_error<E>(_: E) -> Error {
+    Error::Authority
 }

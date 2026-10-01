@@ -91,8 +91,8 @@ impl Fork {
         }
         let policy = source
             .current(binding.community(), now)
-            .map_err(|_| Error::Authority)?;
-        policy.validate(now).map_err(|_| Error::Authority)?;
+            .map_err(authority_error)?;
+        policy.validate(now).map_err(authority_error)?;
         if policy.epoch != self.policy_epoch || !policy.bands.contains(&self.band) {
             return Err(Error::Authority);
         }
@@ -181,9 +181,9 @@ impl Threads {
         for wire in packages {
             bounded_wire(wire)?;
             let package = KeyPackageIn::tls_deserialize_exact(wire)
-                .map_err(|_| Error::Encoding)?
+                .map_err(encoding_error)?
                 .validate(working.0.crypto(), ProtocolVersion::Mls10)
-                .map_err(|_| Error::Crypto)?;
+                .map_err(crypto_error)?;
             let other = decode_credential(
                 package.leaf_node().credential(),
                 package.leaf_node().signature_key().as_slice(),
@@ -209,19 +209,15 @@ impl Threads {
                     GroupId::from_slice(&self.snapshot.slot),
                     credential,
                 )
-                .map_err(|_| Error::Crypto)?;
+                .map_err(crypto_error)?;
                 let (commit, welcome, _) = group
                     .add_members(&working.0, &signer, &validated)
-                    .map_err(|_| Error::Crypto)?;
-                let commit = commit
-                    .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)?;
-                let welcome = welcome
-                    .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)?;
+                    .map_err(crypto_error)?;
+                let commit = commit.tls_serialize_detached().map_err(encoding_error)?;
+                let welcome = welcome.tls_serialize_detached().map_err(encoding_error)?;
                 group
                     .merge_pending_commit(&working.0)
-                    .map_err(|_| Error::Crypto)?;
+                    .map_err(crypto_error)?;
                 Ok((group, commit, welcome))
             })
             .await?;
@@ -261,8 +257,8 @@ impl Threads {
         let working = self.working()?;
         let staged =
             StagedWelcome::new_from_welcome(&working.0, config().join_config(), welcome, None)
-                .map_err(|_| Error::Crypto)?;
-        let sender = staged.welcome_sender().map_err(|_| Error::Crypto)?;
+                .map_err(crypto_error)?;
+        let sender = staged.welcome_sender().map_err(crypto_error)?;
         let sender = decode_credential(sender.credential(), sender.signature_key().as_slice())?;
         if sender.binding.community() != cert.binding.community()
             || !spec.members.contains(sender.binding.member())
@@ -270,7 +266,7 @@ impl Threads {
             return Err(Error::Authority);
         }
         keys.verify(&sender).await?;
-        let group = staged.into_group(&working.0).map_err(|_| Error::Crypto)?;
+        let group = staged.into_group(&working.0).map_err(crypto_error)?;
         self.fork_roster(keys, &group, &cert, &spec).await?;
         let mut candidate =
             self.candidate(&working, Some(&group), cert, None, vec![Event::Joined])?;
@@ -384,8 +380,7 @@ impl Threads {
             return Err(Error::Authority);
         }
         for peer in spec.recipients(cert.binding.member()) {
-            if contacts.relation(peer).map_err(|_| Error::Authority)?.state == ctcs::State::Blocked
-            {
+            if contacts.relation(peer).map_err(authority_error)?.state == ctcs::State::Blocked {
                 return Err(Error::Authority);
             }
         }
@@ -399,9 +394,9 @@ impl Threads {
                 check_signer(&signer, &cert)?;
                 group
                     .create_message(&working.0, &ScopedSigner(signer), bytes)
-                    .map_err(|_| Error::Crypto)?
+                    .map_err(crypto_error)?
                     .tls_serialize_detached()
-                    .map_err(|_| Error::Encoding)
+                    .map_err(encoding_error)
             })
             .await?;
         let id = *ckmg::hash(&wire).value();
@@ -445,13 +440,13 @@ impl Threads {
         }
         let message = parse(wire)?
             .try_into_protocol_message()
-            .map_err(|_| Error::Encoding)?;
+            .map_err(encoding_error)?;
         let working = self.working()?;
         let mut group = self.group(&working)?;
         self.fork_roster(keys, &group, &cert, &spec).await?;
         let processed = group
             .process_message(&working.0, message)
-            .map_err(|_| Error::Crypto)?;
+            .map_err(crypto_error)?;
         let sender = match processed.sender() {
             Sender::Member(index) => group.member_at(*index).ok_or(Error::Authority)?,
             _ => return Err(Error::Authority),
@@ -460,7 +455,7 @@ impl Threads {
         keys.verify(&sender).await?;
         if contacts
             .relation(sender.binding.member())
-            .map_err(|_| Error::Authority)?
+            .map_err(authority_error)?
             .state
             == ctcs::State::Blocked
         {
@@ -556,8 +551,16 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
                 .fork
                 .as_ref()
                 .ok_or(cgrp::Error::Authority)?;
-            let matching=effects.iter().any(|effect| matches!(effect,Effect::Membership{group,lineage,parents,members,level,policy_epoch,revision}
-                if group==&spec.group && lineage==&spec.lineage && parents==&spec.parents && members==&spec.members && level==&spec.level && policy_epoch==&spec.policy_epoch && revision==&spec.revision));
+            let expected_effect = Effect::Membership {
+                group: spec.group,
+                lineage: spec.lineage,
+                parents: spec.parents.clone(),
+                members: spec.members.clone(),
+                level: spec.level,
+                policy_epoch: spec.policy_epoch,
+                revision: spec.revision,
+            };
+            let matching = effects.contains(&expected_effect);
             if !matching
                 || snapshot.community() != candidate.snapshot.binding.community()
                 || snapshot.revision() != spec.revision
@@ -628,7 +631,7 @@ impl Candidate {
         let (snapshot, effects) = groups
             .persist(&mut transaction, now)
             .await
-            .map_err(|_| Error::Storage)?;
+            .map_err(storage_error)?;
         Ok((
             transaction.committed.ok_or(Error::Storage)?,
             snapshot,
@@ -639,8 +642,8 @@ impl Candidate {
 
 impl Candidate {
     fn current_contacts<B: Backend>(&self, store: &Store<B>) -> Result<()> {
-        let contacts = ctcs::Contacts::load(self.snapshot.binding.clone(), store)
-            .map_err(|_| Error::Authority)?;
+        let contacts =
+            ctcs::Contacts::load(self.snapshot.binding.clone(), store).map_err(authority_error)?;
         if contacts.version() != self.expected {
             return Err(Error::Conflict);
         }
@@ -648,12 +651,11 @@ impl Candidate {
         if !self.required_group {
             let bytes = store
                 .read("cgrp", b"snapshot.v1")
-                .map_err(|_| Error::Storage)?
+                .map_err(storage_error)?
                 .ok_or(Error::Authority)?;
-            let current: cgrp::Snapshot =
-                postcard::from_bytes(bytes).map_err(|_| Error::Encoding)?;
+            let current: cgrp::Snapshot = postcard::from_bytes(bytes).map_err(encoding_error)?;
             if current.community() != self.snapshot.binding.community()
-                || current.members(&spec.group).map_err(|_| Error::Authority)? != &spec.members
+                || current.members(&spec.group).map_err(authority_error)? != &spec.members
             {
                 return Err(Error::Authority);
             }
@@ -664,8 +666,7 @@ impl Candidate {
             _ => spec.recipients(self.snapshot.binding.member()),
         };
         for peer in peers {
-            if contacts.relation(peer).map_err(|_| Error::Authority)?.state == ctcs::State::Blocked
-            {
+            if contacts.relation(peer).map_err(authority_error)?.state == ctcs::State::Blocked {
                 return Err(Error::Authority);
             }
         }

@@ -86,3 +86,15 @@ the immutable MLS roster. A departed local member retains historical plaintext
 but cannot send or newly receive. Ordinary message publication also compares
 active membership against the canonical Groups record in the same Vault view;
 a separately updated Groups checkpoint requires its verified Threads transition.
+
+Provider locks are private to one disposable OpenMLS working snapshot, with no
+caller-held guard or callback under a guard. Their poison state is an internal
+invariant, not a recoverable storage failure; scope and backend failures still
+return typed errors. All accepted-history ACK tests derive their signed fixture
+receipt from an actual committed recipient capability. That fixture establishes
+engine behavior only; production receipt authentication remains Delivery-owned.
+
+Each current thread checkpoint is bounded by Store's existing per-value limit.
+Threads rejects an oversized candidate before publication; Store validates every
+restored value before handing it to the owner. No independent larger storage
+allowance, truncated history, or successful partial checkpoint is implied.

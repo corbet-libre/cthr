@@ -1,0 +1,39 @@
+[package]
+name = "cthr"
+version = "0.1.0"
+edition = "2024"
+description = "OpenMLS conversations and accepted history"
+repository = "https://github.com/corbet-foss/cthr"
+license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
+publish = false
+
+[dependencies]
+ckmg = { git = "https://github.com/corbet-foss/ckmg", branch = "main" }
+cwst = { git = "https://github.com/corbet-foss/cwst", branch = "main" }
+cgrp = { git = "https://github.com/corbet-foss/cgrp", branch = "main" }
+ctcs = { git = "https://github.com/corbet-foss/ctcs", branch = "main" }
+openmls = "0.9"
+openmls_rust_crypto = "0.6"
+openmls_traits = "0.6"
+tls_codec = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+schemars = "1"
+zeroize = "1"
+governor = { version = "0.10", default-features = false, features = ["std"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+openmls = { version = "0.9", features = ["js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+futures = "0.3"
+wasm-bindgen-test = "0.3"
+ed25519-dalek = "3"
+blake3 = "1"
+rand_chacha = "0.10"
+rand_core = "0.10"
+
+[lints.rust]
+unsafe_code = "forbid"

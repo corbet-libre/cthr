@@ -19,17 +19,12 @@ checks are ordinary fallible operations before construction/publication.
 
 ## Groups revision invariant
 
-The true arm of `src/fork.rs:566` follows an exact Membership-effect comparison
-including its revision. Groups' private Candidate has no public constructor or
-mutable snapshot/effect access. Its actual `prepare` assigns `next.revision` to
-every generated Membership effect and retains that same `next` as the candidate
-snapshot; `persist` passes them unchanged to the adapter. A matching effect cannot
-coexist with a different snapshot revision. The separate community comparison is
-reachable: a genuine candidate from another community can have identical event
-contents. A real signed foreign-community candidate exercises that refusal.
-
-The reference owner implementation is cgrp `52fcc459cf55ff17d68bfb37c0b2c0f87271e733`,
-`src/lifecycle.rs` (`Candidate`, `prepare`, `prepare_effects`, `persist`).
+Membership effects now carry the per-group revision. The shared adapter matches
+the complete effect and the canonical target GroupState revision; the independent
+Snapshot revision remains the local Store CAS fence. The former claim that every
+effect equals the device-wide revision is superseded. New per-group transcript
+and MLS context paths require actual coverage qualification; no new exclusion
+or accepted coverage claim is introduced by this source change.
 
 ## Read from the validated Store
 

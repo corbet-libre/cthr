@@ -1,5 +1,7 @@
 //! OpenMLS candidate/checkpoint engine. No output exists before durable commit.
 mod fork;
+mod group_context;
+pub use group_context::{ParentEvidence, VerifiedParent};
 pub mod keys;
 use ckmg::{Binding, KeyCertificate, Purpose, Scope};
 use cwst::{Change, Output, Store, backend::Backend};
@@ -456,6 +458,7 @@ impl Threads {
             .use_signer(|signer| {
                 check_signer(&signer, &cert)?;
                 KeyPackage::builder()
+                    .leaf_node_capabilities(group_context::capabilities())
                     .build(SUITE, &working.0, &ScopedSigner(signer), credential)
                     .map_err(crypto_error)?
                     .key_package()

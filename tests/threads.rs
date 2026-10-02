@@ -1295,7 +1295,7 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 prepare(),
                 &mut astore,
                 [80; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut expired
             )
             .await
@@ -1333,7 +1333,7 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 other_group,
                 &mut astore,
                 [80; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut clock
             )
             .await
@@ -1348,7 +1348,7 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                     prepare(),
                     &mut astore,
                     [80; 32],
-                    &source,
+                    (&source, &group_support::TestAuthority),
                     &mut clock
                 )
                 .await
@@ -1429,7 +1429,7 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 groups,
                 &mut astore,
                 [2; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut clock,
             )
             .await
@@ -1437,6 +1437,41 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let Event::Invitation { welcome, .. } = &joined.events()[0] else {
             panic!()
         };
+        let other_time = group_support::request(
+            &empty,
+            cgrp::Command::Create {
+                id: SLOT,
+                members: group_support::members(0, 3),
+                seed: false,
+            },
+            "m0",
+            group_support::members(0, 3),
+            false,
+            999,
+        );
+        let other_time = cgrp::prepare(
+            &empty,
+            &other_time,
+            &source,
+            &group_support::TestAuthority,
+            1000,
+            10,
+        )
+        .unwrap();
+        // Real Welcome, same MLS roster and valid signed consent; only the
+        // authenticated canonical application state differs. Joining must fail.
+        assert_eq!(
+            bp.threads()
+                .join_fork(
+                    &mut b.port(),
+                    &other_time.prepare_effects()[0],
+                    welcome,
+                    &mut clock
+                )
+                .await
+                .err(),
+            Some(Error::Authority)
+        );
         assert_eq!(
             wrong_slot
                 .join_fork(
@@ -1560,6 +1595,17 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let stored: cgrp::Snapshot =
             postcard::from_bytes(astore.read("cgrp", b"snapshot.v1").unwrap().unwrap()).unwrap();
         assert_eq!(stored.revision(), 1);
+        let parent = joined
+            .threads()
+            .parent_evidence(&mut a.port(), &astore, &source, &mut clock)
+            .await
+            .unwrap();
+        assert_eq!(
+            cgrp::GroupState::decode(&parent.state).unwrap(),
+            group_state.group_state(&SLOT).unwrap()
+        );
+        assert!(!parent.group_info.is_empty());
+        assert!(!parent.ratchet_tree.is_empty());
         assert_eq!(joined.threads().lineage().unwrap().0, SLOT);
         assert_eq!(
             joined.threads().notification(),
@@ -1579,11 +1625,19 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 bgroups,
                 &mut bstore,
                 [2; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut clock,
             )
             .await
             .unwrap();
+        let before_newcomer = cstore.version().unwrap();
+        assert!(
+            cp.threads()
+                .verify_parent_evidence(&mut c.port(), &cstore, &parent, &source, &mut clock,)
+                .await
+                .is_err()
+        );
+        assert_eq!(cstore.version().unwrap(), before_newcomer);
         let cgroups = prepare();
         let effects = cgroups.prepare_effects();
         let cc = cp
@@ -1597,7 +1651,7 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             cgroups,
             &mut cstore,
             [2; 32],
-            &source,
+            (&source, &group_support::TestAuthority),
             &mut clock,
         )
         .await
@@ -1605,6 +1659,57 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let contacts = |member: &str, store: &Store<Memory>| {
             ctcs::Contacts::load(Binding::new("alpha", member).unwrap(), store).unwrap()
         };
+        let before_parent_check = bstore.version().unwrap();
+        let verified_parent = bjoined
+            .threads()
+            .verify_parent_evidence(&mut b.port(), &bstore, &parent, &source, &mut clock)
+            .await
+            .unwrap();
+        assert_eq!(
+            verified_parent.state(),
+            &group_state.group_state(&SLOT).unwrap()
+        );
+        assert_eq!(verified_parent.checked_at(), 1000);
+        assert_eq!(bstore.version().unwrap(), before_parent_check);
+        let malformed_parent = cthr::ParentEvidence {
+            state: parent.state.clone(),
+            group_info: vec![0],
+            ratchet_tree: parent.ratchet_tree.clone(),
+        };
+        assert!(
+            bjoined
+                .threads()
+                .verify_parent_evidence(
+                    &mut b.port(),
+                    &bstore,
+                    &malformed_parent,
+                    &source,
+                    &mut clock,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(bstore.version().unwrap(), before_parent_check);
+        let mut tampered_parent = cthr::ParentEvidence {
+            state: parent.state.clone(),
+            group_info: parent.group_info.clone(),
+            ratchet_tree: parent.ratchet_tree.clone(),
+        };
+        *tampered_parent.group_info.last_mut().unwrap() ^= 1;
+        assert!(
+            bjoined
+                .threads()
+                .verify_parent_evidence(
+                    &mut b.port(),
+                    &bstore,
+                    &tampered_parent,
+                    &source,
+                    &mut clock,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(bstore.version().unwrap(), before_parent_check);
         stage("fork baseline established");
         let mut at = joined.into_threads();
         let mut bt = bjoined.into_threads();
@@ -1865,12 +1970,18 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 leave,
                 &mut bstore,
                 [61; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut advanced,
             )
             .await
             .unwrap();
         assert_eq!(left.threads().history().len(), 21);
+        assert!(
+            left.threads()
+                .parent_evidence(&mut b.port(), &bstore, &source, &mut advanced)
+                .await
+                .is_err()
+        );
         assert_eq!(
             left.threads()
                 .receive_group(
@@ -2060,7 +2171,7 @@ fn fork_owner_checkpoint_boundaries() {
                 groups,
                 &mut astore,
                 [2; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut clock,
             )
             .await
@@ -2082,7 +2193,7 @@ fn fork_owner_checkpoint_boundaries() {
                 groups,
                 &mut bstore,
                 [2; 32],
-                &source,
+                (&source, &group_support::TestAuthority),
                 &mut clock,
             )
             .await
@@ -2523,12 +2634,12 @@ async fn fork_checkpoint_refusals(
             foreign_groups,
             &mut target,
             [201; 32],
-            source,
+            (source, &group_support::TestAuthority),
             &mut clock
         )
         .await
         .err(),
-        Some(Error::Storage)
+        Some(Error::Conflict)
     );
 
     for (field, value) in [
@@ -2630,10 +2741,13 @@ async fn fork_checkpoint_refusals(
 
     // Groups bytes are untrusted restored data. The actual Groups candidate is
     // valid, but its checkpoint predecessor must also decode and match.
-    for bytes in [
+    for (index, bytes) in [
         b"invalid".to_vec(),
         postcard::to_allocvec(&cgrp::Snapshot::empty("alpha".into())).unwrap(),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut target = copied_store(a, astore).await;
         put(&mut target, "cgrp", b"snapshot.v1", &bytes, 201).await;
         let threads = Threads::load(a.binding.clone(), SLOT, &target).unwrap();
@@ -2648,12 +2762,16 @@ async fn fork_checkpoint_refusals(
                 leave(),
                 &mut target,
                 [202; 32],
-                source,
+                (source, &group_support::TestAuthority),
                 &mut clock
             )
             .await
             .err(),
-            Some(Error::Storage)
+            Some(if index == 0 {
+                Error::Storage
+            } else {
+                Error::Conflict
+            })
         );
         assert_eq!(target.version().unwrap(), before);
         assert!(target.load_pending().unwrap().is_empty());
@@ -2702,7 +2820,7 @@ async fn fork_checkpoint_refusals(
             leave(),
             &mut target,
             [202; 32],
-            source,
+            (source, &group_support::TestAuthority),
             &mut clock
         )
         .await
@@ -2730,7 +2848,7 @@ async fn fork_checkpoint_refusals(
             leave(),
             &mut target,
             [201; 32],
-            source,
+            (source, &group_support::TestAuthority),
             &mut clock,
         )
         .await

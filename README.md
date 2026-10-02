@@ -4,30 +4,37 @@ Encrypted conversations and accepted history on member devices.
 
 ## Scope
 
-Execute real OpenMLS direct conversations, immutable membership forks and living
-rooms with ordered changes. Groups supplies verified membership, consent,
-lineage and signed history/pace policy. Waves supplies first-contact release
-permission. Keep candidate MLS/history separate from committed state, and share
-one Vault checkpoint with Contacts, Wallet, Groups and pending Delivery outputs.
+### Purpose
 
-Never decide membership, wave permission, accounting, identity, network framing
-or delivery acknowledgement. Never put history or rosters on operator servers.
+cthr carries encrypted conversations and their accepted history for direct chats, immutable group forks, and living rooms.
 
-**States.** Absent → Preparing → Active(epoch); each send or receive produces a
-private Candidate, then Committed. Close/block stops live work while retained
-history remains local; malformed or stale membership is refused.
+### Owns
 
-**Ports.** Genuine Groups/Attend membership decisions, purpose-scoped Keys custody,
-current Contacts, signed group policy, injected clock and encrypted Store. Public
-operations cover direct/fork preparation, send/receive, accepted history and one
-combined checkpoint. Ordered room changes and encrypted newcomer history import
-remain implementation work.
+- Direct, group-fork, and room conversations; unknown conversation types are ignored safely.
+- Execution of verified membership decisions from Groups and Attend, with lineage shown as one conversation.
+- Send and receive pace limits, with receivers dropping excess.
+- Newcomer history within policy, with history kept on member devices.
+- Extensible content types, with text now and voice later.
 
-**Invariants and tests.** No operator-held history or member identity derivation.
-Required evidence is real OpenMLS direct/fork/room roundtrips, current/revoked peer
-checks, tamper/stale epoch/replay refusal, signed pace/history limits, and atomic
-Groups/MLS publication on native and actual Wasm. Unknown conversation types must
-be ignored safely; text is the current content type, voice is later.
+### Never
+
+- Does not decide who may wave, join, or reopen.
+- Does not store history on servers.
+- Does not treat a transport acknowledgement as an answer.
+- Does not derive member identity from a key root.
+- Does not keep the legacy issuer-only identity binding.
+
+### States
+
+Absent → Preparing → Active (epoch); each send or receive moves through Candidate to Committed; offline suspends the live session with history kept; close or block closes it; corrupt or stale membership input is refused.
+
+### Test obligations
+
+- Real OpenMLS round trips for direct, fork, and room conversations on native and Wasm builds with identical vectors.
+- Rejection of foreign or revoked authority, stale epochs, and tampered ciphertext; duplicate or crash replay cannot advance state twice.
+- Enforcement of pace limits, history window, and message cap; newcomers never receive excluded history.
+- Atomic publication of consent, fork, and ordered-join decisions through Groups and Threads, with community isolation kept across keys, sessions, and stores.
+- Full line and branch coverage with real round trips, injected delay, duplication, loss, cancellation, clock regression, corruption, and storage conflicts; bounded resource use with no identifiers, plaintext, or secrets in errors.
 
 ## Dependencies and reuse
 

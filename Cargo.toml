@@ -3,15 +3,15 @@ name = "cthr"
 version = "0.1.0"
 edition = "2024"
 description = "OpenMLS conversations and accepted history"
-repository = "https://github.com/corbet-foss/cthr"
+repository = "https://git.corbet.ch/corbet-foss/cthr.git"
 license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
 publish = false
 
 [dependencies]
-ckmg = { git = "https://github.com/corbet-foss/ckmg", branch = "main" }
-cwst = { git = "https://github.com/corbet-foss/cwst", branch = "main" }
-cgrp = { git = "https://github.com/corbet-foss/cgrp", branch = "main" }
-ctcs = { git = "https://github.com/corbet-foss/ctcs", branch = "main" }
+ckmg = { git = "https://git.corbet.ch/corbet-foss/ckmg.git", branch = "v01" }
+cwst = { git = "https://git.corbet.ch/corbet-foss/cwst.git", branch = "v01" }
+cgrp = { git = "https://git.corbet.ch/corbet-foss/cgrp.git", branch = "v01" }
+ctcs = { git = "https://git.corbet.ch/corbet-foss/ctcs.git", branch = "v01" }
 openmls = "0.9"
 openmls_rust_crypto = "0.6"
 openmls_traits = "0.6"

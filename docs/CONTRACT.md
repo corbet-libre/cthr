@@ -75,6 +75,13 @@ group publication repeats current signed policy and reads Contacts from the
 actual shared Store version. Prepared state is not an authorization lease.
 The Groups companion is canonical Postcard 1, owner cgrp/key snapshot.v1.
 
+`Candidate::commit_groups` takes `(PolicySource, Groups Authority)` as its
+governance argument and repeats the original Groups authorization after all
+asynchronous custody checks. Expired/revoked consent, changed contacts or seed
+authority, changed signed policy and elapsed opening deadlines refuse before
+storage. The transaction also refuses membership effects for any second group:
+a single MLS candidate cannot publish another group's unapplied transition.
+
 Delivery may inspect only the sealed PreparedMessage description (scope, peer,
 message digest, MLS epoch, direction and checkpoint version) before publication.
 It contains no plaintext or ciphertext and is not a transmission/ACK capability.
@@ -113,3 +120,30 @@ Hostile-input vectors use actual upstream OpenMLS with the fixture's borrowed
 Keys signer to produce empty/oversized application content and membership
 proposals. Direct and immutable-fork receivers refuse those messages without
 publishing a changed checkpoint. Fixtures do not establish production attestation.
+
+## Authenticated Groups state
+
+New Groups creation binds the original canonical GroupState commitment in MLS
+GroupContext private-use extension 0xF701. Payload is big-endian u16 version1
+followed by the original 32-byte Groups commitment. RequiredCapabilities and
+every new KeyPackage advertise support. OpenMLS authenticates and checks the
+extension; join_fork additionally requires exact application-state equality.
+Unknown/missing versions, duplicate extension types and changed commitments
+are refused; original direct conversation configuration remains independent.
+
+parent_evidence exports signed GroupInfo, original ratchet tree and canonical
+Groups bytes only from a committed Store view whose actual MLS roster, context
+and Groups state match, after current Keys/policy checks. This serializable
+transport value is not a globally latest assertion or an import capability.
+A metadata-only update_fork departure cannot be exported as new parent evidence.
+Newcomer import, an independently authenticated invitation and atomic ordered
+MLS removal/context updates are still required owner work.
+
+Existing members can call verify_parent_evidence against their exact committed
+canonical Groups state and MLS GroupContext. PublicGroup::from_external validates
+the original signed GroupInfo/tree in a fresh isolated OpenMLS provider; its
+writes never touch the accepted checkpoint. Every imported device certificate
+is checked again through current Keys custody, and the complete authenticated
+context (including epoch/transcript/tree binding) must match the accepted one.
+VerifiedParent has no public constructor or deserializer and is only an
+existing-member check, not a newcomer anchor or a lasting authority lease.

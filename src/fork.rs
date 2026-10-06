@@ -28,6 +28,14 @@ pub(super) struct Fork {
     pace: BTreeMap<String, u64>,
 }
 impl Fork {
+    pub(super) fn matches_state(&self, state: &cgrp::GroupState) -> bool {
+        self.members == self.roster
+            && &self.members == state.members()
+            && &self.group == state.id()
+            && self.revision == state.revision()
+            && self.policy_epoch == state.policy_epoch()
+            && self.level == state.level()
+    }
     pub(super) fn recipients(&self, owner: &str) -> Vec<&str> {
         self.members
             .iter()
@@ -82,7 +90,12 @@ impl Fork {
             pace: BTreeMap::new(),
         })
     }
-    fn current(&self, binding: &Binding, source: &impl PolicySource, now: u64) -> Result<()> {
+    pub(super) fn current(
+        &self,
+        binding: &Binding,
+        source: &impl PolicySource,
+        now: u64,
+    ) -> Result<()> {
         if now < self.last_time {
             return Err(Error::Clock);
         }
@@ -205,7 +218,7 @@ impl Threads {
                 let mut group = MlsGroup::new_with_group_id(
                     &working.0,
                     &signer,
-                    &config(),
+                    &group_context::config(decision.group_state())?,
                     GroupId::from_slice(&self.snapshot.slot),
                     credential,
                 )
@@ -267,6 +280,7 @@ impl Threads {
         }
         keys.verify(&sender).await?;
         let group = staged.into_group(&working.0).map_err(crypto_error)?;
+        group_context::verify(&group, decision.group_state())?;
         self.fork_roster(keys, &group, &cert, &spec).await?;
         let mut candidate =
             self.candidate(&working, Some(&group), cert, None, vec![Event::Joined])?;
@@ -354,7 +368,7 @@ impl Threads {
     pub fn notification(&self) -> Option<cgrp::Notification> {
         self.snapshot.fork.as_ref().map(|f| f.band.notification)
     }
-    fn contacts(&self, contacts: &ctcs::Contacts) -> Result<()> {
+    pub(super) fn contacts(&self, contacts: &ctcs::Contacts) -> Result<()> {
         if contacts.binding() != &self.snapshot.binding || contacts.version() != self.expected {
             return Err(Error::Conflict);
         }
@@ -562,8 +576,11 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
             };
             let matching = effects.contains(&expected_effect);
             if !matching
+                || effects.iter().any(|effect| {
+                    matches!(effect, Effect::Membership { group, .. } if group != &spec.group)
+                })
                 || snapshot.community() != candidate.snapshot.binding.community()
-                || snapshot.revision() != spec.revision
+                || snapshot.group_state(&spec.group)?.revision() != spec.revision
             {
                 return Err(cgrp::Error::Authority);
             }
@@ -608,7 +625,7 @@ impl Candidate {
         groups: cgrp::Candidate,
         store: &mut Store<B>,
         operation: [u8; 32],
-        source: &impl PolicySource,
+        governance: (&impl PolicySource, &impl cgrp::Authority),
         clock: &mut impl ckmg::Clock,
     ) -> Result<(Committed, cgrp::Snapshot, Vec<cgrp::CommittedEffect>)> {
         if !self.required_group {
@@ -616,12 +633,18 @@ impl Candidate {
         }
         self.recheck(keys).await?;
         self.current_contacts(store)?;
+        let previous = cgrp::Snapshot::load(self.snapshot.binding.community(), store)
+            .map_err(storage_error)?;
+        groups.check_base(&previous).map_err(|_| Error::Conflict)?;
         let now = now(clock)?;
+        groups
+            .revalidate(governance.0, governance.1, now)
+            .map_err(authority_error)?;
         let spec = self.snapshot.fork.as_ref().ok_or(Error::State)?;
         if now >= spec.preparation_until {
             return Err(Error::Authority);
         }
-        spec.current(&self.snapshot.binding, source, now)?;
+        spec.current(&self.snapshot.binding, governance.0, now)?;
         let mut transaction = Transaction {
             candidate: Some(self),
             store,

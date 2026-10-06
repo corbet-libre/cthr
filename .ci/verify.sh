@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec 2>&1
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
+export RUST_TEST_THREADS="${RUST_TEST_THREADS:-2}"
+export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}"
+: "${CI_COMMIT_SHA:?verify requires the exact source revision}"
+: "${ARTIFACT_ROOT:?verify requires an absolute ARTIFACT_ROOT}"
+[[ "$ARTIFACT_ROOT" = /* ]] || { echo "ARTIFACT_ROOT must be absolute" >&2; exit 2; }
+export RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+export GITHUB_PATH="${GITHUB_PATH:-$RUNNER_TEMP/github_path}"
+touch "$GITHUB_PATH"
+python3 .github/check-first-party.py
+cargo fmt --all
+git diff -- src tests > "$ARTIFACT_ROOT/formatting.patch"
+test ! -s "$ARTIFACT_ROOT/formatting.patch"
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo metadata --locked --format-version 1 > dependency-metadata.json
+version=$(jq -r '.packages[] | select(.name == "wasm-bindgen") | .version' dependency-metadata.json)
+archive="wasm-bindgen-${version}-x86_64-unknown-linux-musl.tar.gz"
+base="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}"
+mkdir -p "$RUNNER_TEMP/wasm-runner"
+(cd "$RUNNER_TEMP/wasm-runner" && curl --fail --location --retry 3 --remote-name "$base/$archive" && curl --fail --location --retry 3 --remote-name "$base/$archive.sha256sum" && checksum=$(cut -d ' ' -f1 "$archive.sha256sum") && printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check && tar -xzf "$archive" --strip-components=1)
+export PATH="$RUNNER_TEMP/wasm-runner:$PATH"
+export CHROMEDRIVER="$(command -v chromedriver)"
+# wasm-bindgen-test-runner spawns chromedriver, which must resolve a chrome
+# binary deterministically (reviewed cbrd byte pattern): provisioned nix
+# chromium asserted executable, linked under the stock discovery name
+# job-locally. Global filesystem untouched.
+export CHROME_BIN="${CHROME_BIN:-$(command -v chromium)}"
+test -x "$CHROMEDRIVER" || { echo "missing chromedriver at $CHROMEDRIVER" >&2; exit 2; }
+test -x "$CHROME_BIN" || { echo "missing chromium at $CHROME_BIN" >&2; exit 2; }
+mkdir -p "$RUNNER_TEMP/bin"
+ln -sf "$CHROME_BIN" "$RUNNER_TEMP/bin/google-chrome"
+export PATH="$RUNNER_TEMP/bin:$PATH"
+export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
+export WASM_BINDGEN_USE_BROWSER=1 WASM_BINDGEN_TEST_TIMEOUT=60
+cargo test --locked --target wasm32-unknown-unknown --test threads
+rustup run nightly rustc --version
+NIGHTLY_CARGO="$(rustup which --toolchain nightly cargo)"
+"$NIGHTLY_CARGO" llvm-cov --version
+"$NIGHTLY_CARGO" llvm-cov --locked --branch --no-cfg-coverage --no-cfg-coverage-nightly --json --output-path coverage.json --ignore-filename-regex '/tests/'
+"$NIGHTLY_CARGO" llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --lcov --output-path coverage.lcov
+"$NIGHTLY_CARGO" llvm-cov report --locked --branch --ignore-filename-regex '/tests/' --text --output-path coverage.txt
+python3 .github/test-source-coverage.py
+python3 .github/check-source-coverage.py coverage.lcov coverage.json coverage.txt

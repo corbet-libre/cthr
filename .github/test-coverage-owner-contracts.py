@@ -21,7 +21,7 @@ class Contracts(unittest.TestCase):
         self.file.write_text('closed invariant\n')
         self.contracts = [{'package': 'owner', 'files': {'src/lib.rs': hashlib.sha256(self.file.read_bytes()).hexdigest()}}]
         self.metadata = {'packages': [{'name': 'owner', 'manifest_path': str(self.root / 'Cargo.toml'),
-                                      'source': 'git+https://github.com/corbet-foss/owner?branch=main#' + '1' * 40}]}
+                                      'source': 'git+https://git.corbet.ch/corbet-foss/owner?branch=main#' + '1' * 40}]}
 
     def test_accepts_identical_source_on_another_main_revision(self):
         owners.check(self.contracts, self.metadata)

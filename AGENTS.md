@@ -16,3 +16,5 @@ follow main, exactly one locked revision per crate. Keep reproducible locks.
 Plain-English commits, explicit-path staging, pull --rebase before main pushes.
 No force push, registry publication, paid operations, AI attribution or secrets.
 LGPL-3.0-only WITH LGPL-3.0-linking-exception. No GPL/AGPL-only dependencies.
+
+Current working rules (2026-10-12): the live line is branch v01 and CI is Crow through `ci-job` (never GitHub Actions); first-party dependencies follow v01. Punishment and the public record belong to the MVP and the alpha (Julian 2026-10-02 and 2026-10-11); they gate release as the Waves proposal defines.

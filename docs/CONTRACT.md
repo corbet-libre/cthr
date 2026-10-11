@@ -147,3 +147,13 @@ is checked again through current Keys custody, and the complete authenticated
 context (including epoch/transcript/tree binding) must match the accepted one.
 VerifiedParent has no public constructor or deserializer and is only an
 existing-member check, not a newcomer anchor or a lasting authority lease.
+
+Living-room genesis uses `create_room` and `join_room` with the original
+Groups Opening/Public decision at group revision one. Complete signed consent,
+current certified MLS keys, exact canonical Groups context and one shared
+Groups/Threads checkpoint are required. A later Join decision cannot recreate
+an MLS tree from its resulting roster. The original immutable-fork entrypoints
+continue to refuse room decisions. Restored room genesis can authenticate its
+actual current parent and exchange encrypted messages through the same owners.
+This does not authorize ordered external joins, profile-key handover, or listing
+transfer: those require their separate member-side ordered transition.

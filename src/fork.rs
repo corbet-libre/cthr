@@ -49,6 +49,7 @@ impl Fork {
         decision: &PreparedEffect<'_>,
         now: u64,
         require_member: bool,
+        room: bool,
     ) -> Result<Self> {
         let Effect::Membership {
             group,
@@ -68,10 +69,17 @@ impl Fork {
         {
             return Err(Error::Scope);
         }
-        if !matches!(level, Level::Circle | Level::Ingroup) {
+        if !(if room {
+            matches!(level, Level::Opening | Level::Public)
+        } else {
+            matches!(level, Level::Circle | Level::Ingroup)
+        }) {
             return Err(Error::Unavailable);
         }
-        if decision.valid_until() <= now {
+        // A living group's genesis is the first actual Groups revision. Later
+        // member joins/changes cannot create an unrelated MLS tree from their
+        // claimed current roster; they need the ordered room transition path.
+        if (room && *revision != 1) || decision.valid_until() <= now {
             return Err(Error::Authority);
         }
         Ok(Self {
@@ -174,6 +182,17 @@ impl Threads {
         packages: &[Vec<u8>],
         clock: &mut impl ckmg::Clock,
     ) -> Result<Candidate> {
+        self.create_membership(keys, decision, packages, clock, false)
+            .await
+    }
+    pub(super) async fn create_membership(
+        &self,
+        keys: &mut impl Custody,
+        decision: &PreparedEffect<'_>,
+        packages: &[Vec<u8>],
+        clock: &mut impl ckmg::Clock,
+        room: bool,
+    ) -> Result<Candidate> {
         if self.snapshot.group.is_some() {
             return Err(Error::State);
         }
@@ -184,6 +203,7 @@ impl Threads {
             decision,
             now(clock)?,
             true,
+            room,
         )?;
         if packages.len() + 1 != spec.members.len() {
             return Err(Error::Authority);
@@ -252,6 +272,17 @@ impl Threads {
         wire: &[u8],
         clock: &mut impl ckmg::Clock,
     ) -> Result<Candidate> {
+        self.join_membership(keys, decision, wire, clock, false)
+            .await
+    }
+    pub(super) async fn join_membership(
+        &self,
+        keys: &mut impl Custody,
+        decision: &PreparedEffect<'_>,
+        wire: &[u8],
+        clock: &mut impl ckmg::Clock,
+        room: bool,
+    ) -> Result<Candidate> {
         if self.snapshot.group.is_some() {
             return Err(Error::State);
         }
@@ -262,6 +293,7 @@ impl Threads {
             decision,
             now(clock)?,
             true,
+            room,
         )?;
         let welcome = match parse(wire)?.extract() {
             MlsMessageBodyIn::Welcome(welcome) => welcome,
@@ -334,8 +366,14 @@ impl Threads {
         if now < old.last_time {
             return Err(Error::Clock);
         }
-        let mut spec =
-            Fork::from_decision(&cert.binding, &self.snapshot.slot, decision, now, false)?;
+        let mut spec = Fork::from_decision(
+            &cert.binding,
+            &self.snapshot.slot,
+            decision,
+            now,
+            false,
+            false,
+        )?;
         if spec.lineage != old.lineage
             || spec.parents != old.parents
             || !spec.members.is_subset(&old.members)

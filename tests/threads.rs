@@ -4,6 +4,8 @@
 mod binary_payload_refusals;
 #[path = "support/groups.rs"]
 mod group_support;
+#[path = "support/rooms.rs"]
+mod rooms;
 mod support;
 use ckmg::{Binding, KeyHandle, Lineage};
 use ctcs::DeviceAuthority;

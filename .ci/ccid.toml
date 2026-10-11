@@ -2,9 +2,8 @@ schema = 1
 project = "cthr"
 repository = "https://git.corbet.ch/corbet-foss/cthr.git"
 
-# Preserved hosted Linux gates live here;
-# resolve/cargo-update excluded per prior-cohort rule;
-# registry/live reads stay FRESH outside cache.
+# Preserved hosted Linux gates remain unchanged. Dependency resolution is a
+# separate fresh operation, never a verification verdict.
 [checks.verify]
 kind = "commands"
 commands = [["bash", ".ci/verify.sh"]]
@@ -15,12 +14,23 @@ cache_outputs = ["coverage.json", "coverage.lcov", "coverage.txt"]
 kind = "commands"
 commands = [["cargo", "deny", "--locked", "check", "advisories"]]
 
+[checks.resolve-dependencies]
+kind = "commands"
+commands = [["bash", ".ci/resolve-dependencies.sh"]]
+cache_outputs = ["Cargo.lock", "dependency-metadata.json"]
+
 [render]
 tool_revision = "53c129c2efa3b9279d2ecbc237d15acdfb656d8c"
 
 [jobs.verify]
 scheduler = "crow"
 checks = ["verify", "advisories"]
+workflow = "repository-jobs"
+command = ["bash", ".ci/run-cached.sh"]
+
+[jobs.resolve-dependencies]
+scheduler = "crow"
+checks = ["resolve-dependencies"]
 workflow = "repository-jobs"
 command = ["bash", ".ci/run-cached.sh"]
 

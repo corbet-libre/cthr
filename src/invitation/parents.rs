@@ -1,6 +1,6 @@
 //! Maintained MLS import anchored by the exact current contact invitation.
 use super::*;
-use crate::{crypto_error, decode_credential, encoding_error, group_context, parse};
+use crate::{Error, crypto_error, decode_credential, encoding_error, group_context, parse};
 use openmls::{group::PublicGroup, prelude::*};
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;

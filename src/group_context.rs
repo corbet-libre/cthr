@@ -46,13 +46,18 @@ pub(super) fn config(state: &cgrp::GroupState) -> Result<MlsGroupCreateConfig> {
 }
 
 pub(super) fn verify(group: &MlsGroup, state: &cgrp::GroupState) -> Result<()> {
+    verify_context(group.public_group().group_context(), state)
+}
+
+pub(super) fn verify_context(context: &GroupContext, state: &cgrp::GroupState) -> Result<()> {
     let expected = payload(state)?;
-    if group.group_id().as_slice() != state.id()
-        || group
+    if context.ciphersuite() != SUITE
+        || context.group_id().as_slice() != state.id()
+        || context
             .extensions()
             .unknown(GROUP_STATE_EXTENSION)
             .is_none_or(|extension| extension.0 != expected)
-        || group
+        || context
             .extensions()
             .required_capabilities()
             .is_none_or(|required| {

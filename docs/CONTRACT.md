@@ -180,3 +180,55 @@ room updates. At the final shared transaction, the supplied Groups candidate
 must have that exact canonical commitment, not merely matching membership
 fields or revision. Signed decisions with different effective times cannot be
 mixed to publish inconsistent owner checkpoints.
+
+## Current contact invitations
+
+The invitation path is distinct from local `KeyPort::verify(Lineage)`. It checks
+the actual current Charter and Guard-verified public profile, the exact certified
+device, the recipient's established nonconflicting Contacts relation, and two
+strict device signatures. The first is the unchanged Groups Consent. The second
+binds that exact Consent and purpose certificate to the independently retained
+recipient, operation, challenge, policy epoch, expiry and public profile.
+Certificate epoch remains authenticated data, not a private peer Lineage verdict.
+
+The canonical version-one postcard tuple has the fixed domain
+`cthr.invitation.v1\0`. Each ordered original ParentRef additionally binds the
+complete canonical ParentEvidence bytes, including GroupInfo and ratchet tree;
+the application-state commitment alone does not authenticate MLS key selection.
+Each original wire bound is checked before hashing. The proof decoder bounds its
+input and rejects trailing bytes; verification reconstructs exact canonical
+bytes, so unknown versions or altered fields cannot become expectations.
+
+`InvitationStatement::from_committed` checks the sender's actual existing MLS
+and Groups checkpoints and committed Contacts before preparing signing bytes.
+The invitation-only export check matches the imported full GroupContext and
+every stored roster certificate/key against that accepted history. It rechecks
+the sender's own current Keys handle; it neither requests private peer Vault
+records nor declares every historical peer key freshly authorized. The original
+full-Lineage existing-member verification method remains unchanged.
+The local signer must still use its original one-use device intent with a final
+current-owner check over those exact bytes. Public statement construction is
+not signing authority. The producer repeats exact comparisons of all parent
+rows after its final await. Its shared Store borrow is not a fence on independent
+handles: the signing composer must retain its real owner lease and recheck the
+same parent and Contacts versions after any later await, before signature release.
+
+`verify_parents` performs maintained OpenMLS import in isolated storage, checks
+the exact Groups context, complete roster and inviter certificate, and brackets
+the operation with the original clock. `InvitedParent` cannot be deserialized or
+constructed by a caller. It authenticates the contact-endorsed parent; it does
+not assert that every other private peer Lineage is current, that this is the
+globally latest fork, or that a new member has joined. Complete Groups decisions,
+transport ordering and the shared durable checkpoint are still required before
+application use or a current room-count claim. The public-stranger path is
+separate; an arbitrary public GroupInfo cannot substitute for this invitation.
+
+`InvitationAuthority` adds only the original Groups missing-parent port to an
+existing authority. Its sealed parents retain the exact recipient, operation,
+command digest, canonical state, authenticated Charter policy epoch, observation
+second and original expiry. The Groups owner passes its actual selected Policy
+to the parent check; its epoch must equal the sealed Charter epoch. All
+consent/contact/seed checks still delegate to the original owner. A later
+preparation or revalidation needs freshly verified invitation evidence; an
+old capability cannot cross an observed second or renew its lifetime. This
+adapter does not commit a Groups snapshot or authorize a complete fork count.

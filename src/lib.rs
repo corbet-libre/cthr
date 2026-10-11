@@ -1,6 +1,7 @@
 //! OpenMLS candidate/checkpoint engine. No output exists before durable commit.
 mod fork;
 mod group_context;
+pub mod invitation;
 mod room;
 pub use group_context::{ParentEvidence, VerifiedParent};
 pub mod keys;

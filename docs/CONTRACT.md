@@ -136,8 +136,8 @@ Groups bytes only from a committed Store view whose actual MLS roster, context
 and Groups state match, after current Keys/policy checks. This serializable
 transport value is not a globally latest assertion or an import capability.
 A metadata-only update_fork departure cannot be exported as new parent evidence.
-Newcomer import, an independently authenticated invitation and atomic ordered
-MLS removal/context updates are still required owner work.
+Newcomer import, an independently authenticated invitation and transport-ordered
+MLS adoption remain separate owner work.
 
 Existing members can call verify_parent_evidence against their exact committed
 canonical Groups state and MLS GroupContext. PublicGroup::from_external validates
@@ -157,3 +157,26 @@ continue to refuse room decisions. Restored room genesis can authenticate its
 actual current parent and exchange encrypted messages through the same owners.
 This does not authorize ordered external joins, profile-key handover, or listing
 transfer: those require their separate member-side ordered transition.
+
+Existing survivors use `update_room` / `receive_room_update` for a consecutive
+Opening/Public decision that retains or removes members. The accepted Groups
+record and old MLS context must match before preparation. Maintained OpenMLS
+commits exactly the required removals and replacement canonical context;
+unrelated pending proposals, additions, skipped revisions and alternative
+extensions refuse. Removed devices need not remain active, but every surviving
+device is reverified before the shared Groups/Threads CAS. No application use or
+output is released from the candidate before that checkpoint. The resulting
+parent evidence represents the real updated MLS roster and Groups state.
+
+This is transport-independent preparation, not an Assembly ordering receipt or
+complete Attend admission. The original external-join path additionally needs
+its private peer exchange and both ordered commits retained as one pending
+operation. RFC 9420 section 12.2 does not permit GroupContextExtensions in an
+external Commit; the canonical context update follows in a member commit.
+Listing comparison and handover do not follow merely from this local checkpoint.
+
+The candidate retains the commitment actually bound into MLS for genesis and
+room updates. At the final shared transaction, the supplied Groups candidate
+must have that exact canonical commitment, not merely matching membership
+fields or revision. Signed decisions with different effective times cannot be
+mixed to publish inconsistent owner checkpoints.

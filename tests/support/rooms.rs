@@ -1,4 +1,6 @@
 use super::*;
+#[path = "rooms/update.rs"]
+mod update;
 
 // The existing fixture Authority verifies real signed Groups consents and
 // owns a configured seed scope. It is not the production admin/seed issuer.
@@ -102,6 +104,7 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
                 .err(),
             Some(Error::Authority)
         );
+        update::genesis_mismatch(&at, &mut a, &mut astore, &packages, &source, &mut clock).await;
         let candidate = at
             .create_room(&mut a.port(), &effects[0], &packages, &mut clock)
             .await
@@ -291,5 +294,14 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
                 .await
                 .is_err()
         );
+        update::removal(
+            &mut a,
+            &mut b,
+            (&mut astore, &mut bstore),
+            &state,
+            &source,
+            &mut clock,
+        )
+        .await;
     }));
 }

@@ -1,5 +1,6 @@
 //! Immutable MLS forks driven by genuine Groups decisions and signed policy.
 use super::*;
+mod room;
 use cgrp::{Band, Effect, Level, PolicySource, PreparedEffect};
 use governor::{
     Quota, RateLimiter,
@@ -76,10 +77,7 @@ impl Fork {
         }) {
             return Err(Error::Unavailable);
         }
-        // A living group's genesis is the first actual Groups revision. Later
-        // member joins/changes cannot create an unrelated MLS tree from their
-        // claimed current roster; they need the ordered room transition path.
-        if (room && *revision != 1) || decision.valid_until() <= now {
+        if decision.valid_until() <= now {
             return Err(Error::Authority);
         }
         Ok(Self {
@@ -205,6 +203,11 @@ impl Threads {
             true,
             room,
         )?;
+        // Later decisions must update the accepted MLS context, never create a
+        // second genesis from a claimed current roster.
+        if room && spec.revision != 1 {
+            return Err(Error::Authority);
+        }
         if packages.len() + 1 != spec.members.len() {
             return Err(Error::Authority);
         }
@@ -263,6 +266,12 @@ impl Threads {
         )?;
         candidate.snapshot.fork = Some(spec);
         candidate.required_group = true;
+        candidate.required_context = Some(
+            decision
+                .group_state()
+                .commitment()
+                .map_err(authority_error)?,
+        );
         Ok(candidate)
     }
     pub async fn join_fork(
@@ -295,6 +304,11 @@ impl Threads {
             true,
             room,
         )?;
+        // Later decisions must update the accepted MLS context, never create a
+        // second genesis from a claimed current roster.
+        if room && spec.revision != 1 {
+            return Err(Error::Authority);
+        }
         let welcome = match parse(wire)?.extract() {
             MlsMessageBodyIn::Welcome(welcome) => welcome,
             _ => return Err(Error::Encoding),
@@ -318,6 +332,12 @@ impl Threads {
             self.candidate(&working, Some(&group), cert, None, vec![Event::Joined])?;
         candidate.snapshot.fork = Some(spec);
         candidate.required_group = true;
+        candidate.required_context = Some(
+            decision
+                .group_state()
+                .commitment()
+                .map_err(authority_error)?,
+        );
         Ok(candidate)
     }
     pub(super) async fn fork_roster(
@@ -619,6 +639,11 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
                 })
                 || snapshot.community() != candidate.snapshot.binding.community()
                 || snapshot.group_state(&spec.group)?.revision() != spec.revision
+            {
+                return Err(cgrp::Error::Authority);
+            }
+            if let Some(expected_context) = candidate.required_context
+                && snapshot.group_state(&spec.group)?.commitment()? != expected_context
             {
                 return Err(cgrp::Error::Authority);
             }

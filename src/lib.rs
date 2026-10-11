@@ -120,6 +120,11 @@ pub enum Event {
     },
     Joined,
     MembershipChanged,
+    /// Encrypted member commit authenticating the next complete room state.
+    /// Like every output, it is released only after the shared checkpoint.
+    MembershipCommit {
+        bytes: Vec<u8>,
+    },
     Accepted {
         message: Message,
     },
@@ -136,6 +141,8 @@ pub struct Candidate {
     base: Option<Zeroizing<Vec<u8>>>,
     events: Vec<Event>,
     required_group: bool,
+    // Set only by the actual MLS context owner. Not a serialized assertion.
+    required_context: Option<[u8; 32]>,
 }
 /// A sealed description for a sibling checkpoint participant. It carries no
 /// plaintext or ciphertext and grants no permission to transmit or acknowledge.
@@ -446,6 +453,7 @@ impl Threads {
             base: self.base.clone(),
             events,
             required_group: false,
+            required_context: None,
         })
     }
     pub async fn key_package(&self, keys: &mut impl Custody) -> Result<Candidate> {
@@ -685,6 +693,7 @@ impl Threads {
             base: self.base.clone(),
             events: vec![Event::Accepted { message }],
             required_group: false,
+            required_context: None,
         })
     }
     pub async fn receive(

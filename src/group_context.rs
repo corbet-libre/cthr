@@ -23,8 +23,8 @@ fn payload(state: &cgrp::GroupState) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn config(state: &cgrp::GroupState) -> Result<MlsGroupCreateConfig> {
-    let extensions = Extensions::try_from(vec![
+pub(super) fn extensions(state: &cgrp::GroupState) -> Result<Extensions<GroupContext>> {
+    Extensions::try_from(vec![
         Extension::RequiredCapabilities(RequiredCapabilitiesExtension::new(
             &[ExtensionType::Unknown(GROUP_STATE_EXTENSION)],
             &[],
@@ -32,13 +32,16 @@ pub(super) fn config(state: &cgrp::GroupState) -> Result<MlsGroupCreateConfig> {
         )),
         Extension::Unknown(GROUP_STATE_EXTENSION, UnknownExtension(payload(state)?)),
     ])
-    .map_err(encoding_error)?;
+    .map_err(encoding_error)
+}
+
+pub(super) fn config(state: &cgrp::GroupState) -> Result<MlsGroupCreateConfig> {
     Ok(MlsGroupCreateConfig::builder()
         .ciphersuite(SUITE)
         .use_ratchet_tree_extension(true)
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
         .capabilities(capabilities())
-        .with_group_context_extensions(extensions)
+        .with_group_context_extensions(extensions(state)?)
         .build())
 }
 

@@ -63,7 +63,9 @@ impl InvitationStatement {
                 request.actor == expected.sender.member() && members.contains(recipient)
             }
             cgrp::Command::Join { member, .. } => member == recipient && request.actor == recipient,
-            cgrp::Command::Leave { .. } | cgrp::Command::Tick => false,
+            cgrp::Command::Leave { .. }
+            | cgrp::Command::Describe { .. }
+            | cgrp::Command::Tick => false,
         };
         if !included || consent.signature.len() != 64 {
             return Err(Error::Authority);

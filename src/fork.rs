@@ -664,7 +664,7 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
                 Zeroizing::new(postcard::to_allocvec(snapshot).map_err(|_| cgrp::Error::Invalid)?);
             self.committed = Some(
                 candidate
-                    .persist(
+                    .persist_now(
                         self.store,
                         self.operation,
                         &[Change::Put {
@@ -778,6 +778,6 @@ impl Candidate {
             return Err(Error::Authority);
         }
         spec.current(&self.snapshot.binding, source, now(clock)?)?;
-        self.persist_now(store, operation).await
+        self.persist_now(store, operation, &[]).await
     }
 }

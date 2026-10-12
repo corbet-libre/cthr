@@ -762,25 +762,7 @@ impl Candidate {
         companions: &[Change<'_>],
     ) -> Result<Committed> {
         let staged = self.stage(keys, authority, store, operation).await?;
-        let mut changes = vec![];
-        for c in companions {
-            let owner = match c {
-                Change::Put { owner, .. } | Change::Delete { owner, .. } => owner,
-            };
-            if *owner == OWNER {
-                return Err(Error::Scope);
-            }
-            changes.push(match c {
-                Change::Put { owner, key, value } => Change::Put { owner, key, value },
-                Change::Delete { owner, key } => Change::Delete { owner, key },
-            });
-        }
-        changes.extend(staged.changes());
-        let version = store
-            .commit(staged.expected, operation, &changes, &staged.outputs)
-            .await
-            .map_err(storage_error)?;
-        Ok(staged.finish(version))
+        staged.write(store, operation, companions).await
     }
     /// Run every check `commit` runs and serialize this owner's change and its
     /// pending outputs, without writing. The caller commits `Staged::changes`
@@ -841,18 +823,10 @@ impl Candidate {
         self,
         store: &mut Store<B>,
         operation: [u8; 32],
+        companions: &[Change<'_>],
     ) -> Result<Committed> {
         let staged = self.persist(store, operation)?;
-        let version = store
-            .commit(
-                staged.expected,
-                operation,
-                &staged.changes(),
-                &staged.outputs,
-            )
-            .await
-            .map_err(storage_error)?;
-        Ok(staged.finish(version))
+        staged.write(store, operation, companions).await
     }
     fn persist<B: Backend>(self, store: &Store<B>, operation: [u8; 32]) -> Result<Staged> {
         if !store.is_scope(self.snapshot.binding.community()) {
@@ -898,6 +872,32 @@ pub struct Staged {
     expected: u64,
 }
 impl Staged {
+    async fn write<B: Backend>(
+        self,
+        store: &mut Store<B>,
+        operation: [u8; 32],
+        companions: &[Change<'_>],
+    ) -> Result<Committed> {
+        let mut changes = vec![];
+        for c in companions {
+            let owner = match c {
+                Change::Put { owner, .. } | Change::Delete { owner, .. } => owner,
+            };
+            if *owner == OWNER {
+                return Err(Error::Scope);
+            }
+            changes.push(match c {
+                Change::Put { owner, key, value } => Change::Put { owner, key, value },
+                Change::Delete { owner, key } => Change::Delete { owner, key },
+            });
+        }
+        changes.extend(self.changes());
+        let version = store
+            .commit(self.expected, operation, &changes, &self.outputs)
+            .await
+            .map_err(storage_error)?;
+        Ok(self.finish(version))
+    }
     /// The Store version the shared transaction must be fenced at.
     pub fn expected(&self) -> u64 {
         self.expected

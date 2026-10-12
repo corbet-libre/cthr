@@ -778,6 +778,6 @@ impl Candidate {
             return Err(Error::Authority);
         }
         spec.current(&self.snapshot.binding, source, now(clock)?)?;
-        self.persist(store, operation, &[]).await
+        self.persist_now(store, operation).await
     }
 }

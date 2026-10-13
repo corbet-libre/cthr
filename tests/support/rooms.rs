@@ -1,4 +1,6 @@
 use super::*;
+#[path = "rooms/attend.rs"]
+mod attend;
 #[path = "rooms/join.rs"]
 mod join;
 #[path = "rooms/update.rs"]

@@ -1011,6 +1011,7 @@ dependencies = [
  "csgn",
  "cshm",
  "ctcs",
+ "ctnd",
  "cwst",
  "ed25519-dalek 3.0.0",
  "futures",
@@ -1028,6 +1029,18 @@ dependencies = [
  "tls_codec",
  "wasm-bindgen-test",
  "zeroize",
+]
+
+[[package]]
+name = "ctnd"
+version = "0.1.0"
+source = "git+https://git.corbet.ch/corbet-foss/ctnd.git?branch=v01#dd5eed917533dbd7da44d280786cec19f7060cbc"
+dependencies = [
+ "cgrp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

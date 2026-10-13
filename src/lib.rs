@@ -1,8 +1,10 @@
 //! OpenMLS candidate/checkpoint engine. No output exists before durable commit.
+mod attend;
 mod fork;
 mod group_context;
 pub mod invitation;
 mod room;
+pub use attend::{ContextFeed, JoinParts, JoinSession, SessionStore, SessionThreads};
 pub use fork::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 pub use group_context::{ParentEvidence, VerifiedParent};
 pub mod keys;

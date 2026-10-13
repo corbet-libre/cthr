@@ -1,7 +1,6 @@
 //! Immutable MLS forks driven by genuine Groups decisions and signed policy.
 use super::*;
 mod room;
-pub use room::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 use cgrp::{Band, Effect, Level, PolicySource, PreparedEffect};
 use governor::{
     Quota, RateLimiter,
@@ -10,6 +9,7 @@ use governor::{
     nanos::Nanos,
     state::{NotKeyed, StateStore},
 };
+pub use room::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 use std::{cell::Cell, collections::BTreeMap, num::NonZeroU32, rc::Rc};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -609,7 +609,10 @@ struct Transaction<'a, B: Backend> {
     store: &'a mut Store<B>,
     operation: [u8; 32],
     committed: Option<Committed>,
+    companion: Option<Companion<'a>>,
 }
+/// One more owner record written in the same shared checkpoint.
+pub(super) type Companion<'a> = (&'a str, &'a [u8], &'a [u8]);
 impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
     fn commit<'a>(
         &'a mut self,
@@ -663,17 +666,17 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
             }
             let bytes =
                 Zeroizing::new(postcard::to_allocvec(snapshot).map_err(|_| cgrp::Error::Invalid)?);
+            let mut changes = vec![Change::Put {
+                owner: "cgrp",
+                key: b"snapshot.v1",
+                value: &bytes,
+            }];
+            if let Some((owner, key, value)) = self.companion {
+                changes.push(Change::Put { owner, key, value });
+            }
             self.committed = Some(
                 candidate
-                    .persist_now(
-                        self.store,
-                        self.operation,
-                        &[Change::Put {
-                            owner: "cgrp",
-                            key: b"snapshot.v1",
-                            value: &bytes,
-                        }],
-                    )
+                    .persist_now(self.store, self.operation, &changes)
                     .await
                     .map_err(|_| cgrp::Error::Reconcile)?,
             );
@@ -691,6 +694,22 @@ impl Candidate {
         operation: [u8; 32],
         governance: (&impl PolicySource, &impl cgrp::Authority),
         clock: &mut impl ckmg::Clock,
+    ) -> Result<(Committed, cgrp::Snapshot, Vec<cgrp::CommittedEffect>)> {
+        self.commit_groups_with(keys, groups, store, operation, governance, clock, None)
+            .await
+    }
+    /// As `commit_groups`, with one more owner record (the Attend checkpoint)
+    /// in the same shared checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn commit_groups_with<B: Backend>(
+        self,
+        keys: &mut impl Custody,
+        groups: cgrp::Candidate,
+        store: &mut Store<B>,
+        operation: [u8; 32],
+        governance: (&impl PolicySource, &impl cgrp::Authority),
+        clock: &mut impl ckmg::Clock,
+        companion: Option<Companion<'_>>,
     ) -> Result<(Committed, cgrp::Snapshot, Vec<cgrp::CommittedEffect>)> {
         if !self.required_group {
             return Err(Error::State);
@@ -714,6 +733,7 @@ impl Candidate {
             store,
             operation,
             committed: None,
+            companion,
         };
         let (snapshot, effects) = groups
             .persist(&mut transaction, now)

@@ -209,6 +209,11 @@ impl PreparedMessage<'_> {
     }
 }
 impl Candidate {
+    /// The events this candidate publishes once committed (for an admission,
+    /// the member commit that must be ordered before anything is stored).
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
     pub fn prepared_message(&self) -> Option<PreparedMessage<'_>> {
         match self.events.first()? {
             Event::Ciphertext { id, .. } => {

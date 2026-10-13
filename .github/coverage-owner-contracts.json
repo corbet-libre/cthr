@@ -1,0 +1,21 @@
+[
+  {
+    "package": "cgrp",
+    "files": {
+      "src/lifecycle.rs": "5c9a68e0c8e21219b91322d0c0b732ee600cabff1e1b50caa06501291295c2ea"
+    }
+  },
+  {
+    "package": "cwst",
+    "files": {
+      "src/store.rs": "c29f43ccbaab0a2f05e5a575fb75c04fcf0b16ec3c8a93c32e9b93c0a41fc49f",
+      "src/lib.rs": "1e7e1a1f98c787dd952b143c988807d713c55eafe2a14ca68bbfc91c70a00761"
+    }
+  },
+  {
+    "package": "ctcs",
+    "files": {
+      "src/lib.rs": "3820c87f80777b8bdaed9057612c795280daee6e71dc5ad00ea33a1286c2add5"
+    }
+  }
+]

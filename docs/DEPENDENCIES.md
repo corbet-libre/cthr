@@ -1,17 +1,20 @@
-# Maintained OpenMLS provider and current audit blocker
+# Maintained OpenMLS provider and advisory policy
 
 Threads uses OpenMLS 0.9 with its maintained RustCrypto 0.6 provider rather than
 implementing a cryptographic provider. The resolver keeps semver ranges and a
 reproducible complete lock snapshot; no version is downgraded to evade an audit.
 
-Current dependency policy refuses RUSTSEC-2026-0173: proc-macro-error2 2.0.1 is
-unmaintained. It arrives through hax-lib-macros 0.3.7 / hax-lib 0.3.7, libcrux-sha3
-0.0.10 and hpke-rs 0.7.0. RustSec classifies it as informational unmaintained,
-with no patched proc-macro-error2 release. The newer hax 0.4 line is outside the
-upstream compatible requirement. This crate has not suppressed the advisory or
-substituted its own crypto. Full green acceptance waits upstream resolution or
-an explicitly reviewed dependency disposition; functional tests alone do not pass
-that gate.
+On 2026-10-02, RustSec classified RUSTSEC-2026-0173 for proc-macro-error2
+2.0.1 as informational unmaintained, with no patched version. The dependency
+arrives through hax-lib-macros 0.3.7 / hax-lib 0.3.7, libcrux-sha3 0.0.10 and
+hpke-rs 0.7.0. The newer hax 0.4 line is outside the compatible requirement.
+
+The dated, advisory-specific exception in deny.toml permits this informational
+notice only. Vulnerabilities are never excepted. The upstream tracking issue is
+https://github.com/GnomedDev/proc-macro-error-2/issues/17. Dependabot continues
+refreshing compatible dependencies and cargo-deny checks the advisory database;
+unused exceptions fail the policy gate, requiring removal when upstream fixes
+the chain. No dependency was downgraded and no crypto provider was forked.
 
 Primary evidence:
 

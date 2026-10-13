@@ -84,16 +84,21 @@ pub fn policy() -> Policy {
 }
 
 pub struct SignedPolicy {
+    community: String,
     bytes: Vec<u8>,
     signature: [u8; 64],
     key: [u8; 32],
 }
 impl SignedPolicy {
     pub fn new(p: &Policy) -> Self {
+        Self::for_community("alpha", p)
+    }
+    pub fn for_community(community: &str, p: &Policy) -> Self {
         let key = SigningKey::from_bytes(&[230; 32]);
         let bytes = serde_json::to_vec(p).unwrap();
         let signature = key.sign(&bytes).to_bytes();
         Self {
+            community: community.into(),
             bytes,
             signature,
             key: key.verifying_key().to_bytes(),
@@ -105,7 +110,7 @@ impl SignedPolicy {
 }
 impl PolicySource for SignedPolicy {
     fn current(&self, community: &str, _: u64) -> Result<Policy> {
-        if community != "alpha" {
+        if community != self.community {
             return Err(Error::Authority);
         }
         ckmg::verify_ed25519(&self.key, &self.bytes, &self.signature)
@@ -164,7 +169,8 @@ pub fn request(
 ) -> Request {
     let mut r = Request {
         operation: *ckmg::hash(&state.revision().to_le_bytes()).value(),
-        expected_revision: state.revision(),
+        parents: state.parent_references(&command).unwrap_or_default(),
+        effective_at: now,
         actor: actor.into(),
         command,
         consents: vec![],
@@ -174,10 +180,10 @@ pub fn request(
             community: state.community().into(),
             member,
             operation: r.operation,
-            expected_revision: state.revision(),
             policy_epoch: 1,
             command_digest: r.command_digest().unwrap(),
             profile_visibility: visible,
+            key_package: vec![],
             valid_until: now + DAY,
             signature: vec![],
             authority: vec![],

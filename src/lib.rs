@@ -1,5 +1,14 @@
 //! OpenMLS candidate/checkpoint engine. No output exists before durable commit.
+mod attend;
 mod fork;
+mod group_context;
+pub mod invitation;
+mod leave;
+mod room;
+pub use attend::{ContextFeed, JoinParts, JoinSession, SessionStore, SessionThreads};
+pub use fork::{MAX_HANDOVER, RoomAdmission, RoomJoin};
+pub use group_context::{ParentEvidence, VerifiedParent};
+pub use leave::{LeaveParts, leave_room};
 pub mod keys;
 use ckmg::{Binding, KeyCertificate, Purpose, Scope};
 use cwst::{Change, Output, Store, backend::Backend};
@@ -117,6 +126,11 @@ pub enum Event {
     },
     Joined,
     MembershipChanged,
+    /// Encrypted member commit authenticating the next complete room state.
+    /// Like every output, it is released only after the shared checkpoint.
+    MembershipCommit {
+        bytes: Vec<u8>,
+    },
     Accepted {
         message: Message,
     },
@@ -133,6 +147,8 @@ pub struct Candidate {
     base: Option<Zeroizing<Vec<u8>>>,
     events: Vec<Event>,
     required_group: bool,
+    // Set only by the actual MLS context owner. Not a serialized assertion.
+    required_context: Option<[u8; 32]>,
 }
 /// A sealed description for a sibling checkpoint participant. It carries no
 /// plaintext or ciphertext and grants no permission to transmit or acknowledge.
@@ -443,6 +459,7 @@ impl Threads {
             base: self.base.clone(),
             events,
             required_group: false,
+            required_context: None,
         })
     }
     pub async fn key_package(&self, keys: &mut impl Custody) -> Result<Candidate> {
@@ -456,6 +473,7 @@ impl Threads {
             .use_signer(|signer| {
                 check_signer(&signer, &cert)?;
                 KeyPackage::builder()
+                    .leaf_node_capabilities(group_context::capabilities())
                     .build(SUITE, &working.0, &ScopedSigner(signer), credential)
                     .map_err(crypto_error)?
                     .key_package()
@@ -681,6 +699,7 @@ impl Threads {
             base: self.base.clone(),
             events: vec![Event::Accepted { message }],
             required_group: false,
+            required_context: None,
         })
     }
     pub async fn receive(
@@ -747,6 +766,20 @@ impl Candidate {
         operation: [u8; 32],
         companions: &[Change<'_>],
     ) -> Result<Committed> {
+        let staged = self.stage(keys, authority, store, operation).await?;
+        staged.write(store, operation, companions).await
+    }
+    /// Run every check `commit` runs and serialize this owner's change and its
+    /// pending outputs, without writing. The caller commits `Staged::changes`
+    /// and `Staged::outputs` with companion owners in ONE Store transaction at
+    /// `Staged::expected` and the same `operation`, then calls `Staged::finish`.
+    pub async fn stage<B: Backend>(
+        self,
+        keys: &mut impl Custody,
+        authority: &mut impl DirectAuthority,
+        store: &Store<B>,
+        operation: [u8; 32],
+    ) -> Result<Staged> {
         if self.snapshot.fork.is_some() {
             return Err(Error::Authority);
         }
@@ -761,7 +794,7 @@ impl Candidate {
                 .authorize(&self.snapshot.binding, peer, &self.snapshot.slot, action)
                 .await?;
         }
-        self.persist(store, operation, companions).await
+        self.persist(store, operation)
     }
     async fn recheck(&self, keys: &mut impl Custody) -> Result<()> {
         let view = Threads {
@@ -791,12 +824,16 @@ impl Candidate {
         }
         Ok(())
     }
-    async fn persist<B: Backend>(
+    async fn persist_now<B: Backend>(
         self,
         store: &mut Store<B>,
         operation: [u8; 32],
         companions: &[Change<'_>],
     ) -> Result<Committed> {
+        let staged = self.persist(store, operation)?;
+        staged.write(store, operation, companions).await
+    }
+    fn persist<B: Backend>(self, store: &Store<B>, operation: [u8; 32]) -> Result<Staged> {
         if !store.is_scope(self.snapshot.binding.community()) {
             return Err(Error::Scope);
         }
@@ -811,6 +848,41 @@ impl Candidate {
         if bytes.len() > MAX_CHECKPOINT {
             return Err(Error::Limit);
         }
+        let mut outputs = vec![];
+        for (index, event) in self.events.iter().enumerate() {
+            let bytes = serde_json::to_vec(event).map_err(encoding_error)?;
+            let id = *ckmg::hash(
+                &serde_json::to_vec(&("cthr.output.v1", operation, index, &bytes))
+                    .map_err(encoding_error)?,
+            )
+            .value();
+            outputs.push(Output { id, bytes });
+        }
+        Ok(Staged {
+            snapshot: self.snapshot,
+            events: self.events,
+            bytes,
+            outputs,
+            expected: self.expected,
+        })
+    }
+}
+/// A fully checked thread change that has not been written. Dropping it
+/// publishes nothing.
+pub struct Staged {
+    snapshot: Snapshot,
+    events: Vec<Event>,
+    bytes: Zeroizing<Vec<u8>>,
+    outputs: Vec<Output>,
+    expected: u64,
+}
+impl Staged {
+    async fn write<B: Backend>(
+        self,
+        store: &mut Store<B>,
+        operation: [u8; 32],
+        companions: &[Change<'_>],
+    ) -> Result<Committed> {
         let mut changes = vec![];
         for c in companions {
             let owner = match c {
@@ -824,33 +896,39 @@ impl Candidate {
                 Change::Delete { owner, key } => Change::Delete { owner, key },
             });
         }
-        changes.push(Change::Put {
-            owner: OWNER,
-            key: &self.snapshot.slot,
-            value: &bytes,
-        });
-        let mut outputs = vec![];
-        for (index, event) in self.events.iter().enumerate() {
-            let bytes = serde_json::to_vec(event).map_err(encoding_error)?;
-            let id = *ckmg::hash(
-                &serde_json::to_vec(&("cthr.output.v1", operation, index, &bytes))
-                    .map_err(encoding_error)?,
-            )
-            .value();
-            outputs.push(Output { id, bytes });
-        }
-        let expected = store
-            .commit(self.expected, operation, &changes, &outputs)
+        changes.extend(self.changes());
+        let version = store
+            .commit(self.expected, operation, &changes, &self.outputs)
             .await
             .map_err(storage_error)?;
-        Ok(Committed {
+        Ok(self.finish(version))
+    }
+    /// The Store version the shared transaction must be fenced at.
+    pub fn expected(&self) -> u64 {
+        self.expected
+    }
+    /// This owner's changes for the shared transaction.
+    pub fn changes(&self) -> Vec<Change<'_>> {
+        vec![Change::Put {
+            owner: OWNER,
+            key: &self.snapshot.slot,
+            value: &self.bytes,
+        }]
+    }
+    /// The pending outputs the same transaction must carry.
+    pub fn outputs(&self) -> &[Output] {
+        &self.outputs
+    }
+    /// Adopt the version returned by the shared transaction.
+    pub fn finish(self, version: u64) -> Committed {
+        Committed {
             threads: Threads {
                 snapshot: self.snapshot,
-                expected,
-                base: Some(bytes),
+                expected: version,
+                base: Some(self.bytes),
             },
             events: self.events,
-        })
+        }
     }
 }
 fn config() -> MlsGroupCreateConfig {

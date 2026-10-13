@@ -1,5 +1,6 @@
 //! Immutable MLS forks driven by genuine Groups decisions and signed policy.
 use super::*;
+mod room;
 use cgrp::{Band, Effect, Level, PolicySource, PreparedEffect};
 use governor::{
     Quota, RateLimiter,
@@ -8,6 +9,7 @@ use governor::{
     nanos::Nanos,
     state::{NotKeyed, StateStore},
 };
+pub use room::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 use std::{cell::Cell, collections::BTreeMap, num::NonZeroU32, rc::Rc};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -28,6 +30,14 @@ pub(super) struct Fork {
     pace: BTreeMap<String, u64>,
 }
 impl Fork {
+    pub(super) fn matches_state(&self, state: &cgrp::GroupState) -> bool {
+        self.members == self.roster
+            && &self.members == state.members()
+            && &self.group == state.id()
+            && self.revision == state.revision()
+            && self.policy_epoch == state.policy_epoch()
+            && self.level == state.level()
+    }
     pub(super) fn recipients(&self, owner: &str) -> Vec<&str> {
         self.members
             .iter()
@@ -41,6 +51,7 @@ impl Fork {
         decision: &PreparedEffect<'_>,
         now: u64,
         require_member: bool,
+        room: bool,
     ) -> Result<Self> {
         let Effect::Membership {
             group,
@@ -60,7 +71,11 @@ impl Fork {
         {
             return Err(Error::Scope);
         }
-        if !matches!(level, Level::Circle | Level::Ingroup) {
+        if !(if room {
+            matches!(level, Level::Opening | Level::Public)
+        } else {
+            matches!(level, Level::Circle | Level::Ingroup)
+        }) {
             return Err(Error::Unavailable);
         }
         if decision.valid_until() <= now {
@@ -82,7 +97,12 @@ impl Fork {
             pace: BTreeMap::new(),
         })
     }
-    fn current(&self, binding: &Binding, source: &impl PolicySource, now: u64) -> Result<()> {
+    pub(super) fn current(
+        &self,
+        binding: &Binding,
+        source: &impl PolicySource,
+        now: u64,
+    ) -> Result<()> {
         if now < self.last_time {
             return Err(Error::Clock);
         }
@@ -161,6 +181,17 @@ impl Threads {
         packages: &[Vec<u8>],
         clock: &mut impl ckmg::Clock,
     ) -> Result<Candidate> {
+        self.create_membership(keys, decision, packages, clock, false)
+            .await
+    }
+    pub(super) async fn create_membership(
+        &self,
+        keys: &mut impl Custody,
+        decision: &PreparedEffect<'_>,
+        packages: &[Vec<u8>],
+        clock: &mut impl ckmg::Clock,
+        room: bool,
+    ) -> Result<Candidate> {
         if self.snapshot.group.is_some() {
             return Err(Error::State);
         }
@@ -171,7 +202,13 @@ impl Threads {
             decision,
             now(clock)?,
             true,
+            room,
         )?;
+        // Later decisions must update the accepted MLS context, never create a
+        // second genesis from a claimed current roster.
+        if room && spec.revision != 1 {
+            return Err(Error::Authority);
+        }
         if packages.len() + 1 != spec.members.len() {
             return Err(Error::Authority);
         }
@@ -205,7 +242,7 @@ impl Threads {
                 let mut group = MlsGroup::new_with_group_id(
                     &working.0,
                     &signer,
-                    &config(),
+                    &group_context::config(decision.group_state())?,
                     GroupId::from_slice(&self.snapshot.slot),
                     credential,
                 )
@@ -230,6 +267,12 @@ impl Threads {
         )?;
         candidate.snapshot.fork = Some(spec);
         candidate.required_group = true;
+        candidate.required_context = Some(
+            decision
+                .group_state()
+                .commitment()
+                .map_err(authority_error)?,
+        );
         Ok(candidate)
     }
     pub async fn join_fork(
@@ -238,6 +281,17 @@ impl Threads {
         decision: &PreparedEffect<'_>,
         wire: &[u8],
         clock: &mut impl ckmg::Clock,
+    ) -> Result<Candidate> {
+        self.join_membership(keys, decision, wire, clock, false)
+            .await
+    }
+    pub(super) async fn join_membership(
+        &self,
+        keys: &mut impl Custody,
+        decision: &PreparedEffect<'_>,
+        wire: &[u8],
+        clock: &mut impl ckmg::Clock,
+        room: bool,
     ) -> Result<Candidate> {
         if self.snapshot.group.is_some() {
             return Err(Error::State);
@@ -249,7 +303,13 @@ impl Threads {
             decision,
             now(clock)?,
             true,
+            room,
         )?;
+        // Later decisions must update the accepted MLS context, never create a
+        // second genesis from a claimed current roster.
+        if room && spec.revision != 1 {
+            return Err(Error::Authority);
+        }
         let welcome = match parse(wire)?.extract() {
             MlsMessageBodyIn::Welcome(welcome) => welcome,
             _ => return Err(Error::Encoding),
@@ -267,11 +327,18 @@ impl Threads {
         }
         keys.verify(&sender).await?;
         let group = staged.into_group(&working.0).map_err(crypto_error)?;
+        group_context::verify(&group, decision.group_state())?;
         self.fork_roster(keys, &group, &cert, &spec).await?;
         let mut candidate =
             self.candidate(&working, Some(&group), cert, None, vec![Event::Joined])?;
         candidate.snapshot.fork = Some(spec);
         candidate.required_group = true;
+        candidate.required_context = Some(
+            decision
+                .group_state()
+                .commitment()
+                .map_err(authority_error)?,
+        );
         Ok(candidate)
     }
     pub(super) async fn fork_roster(
@@ -320,8 +387,14 @@ impl Threads {
         if now < old.last_time {
             return Err(Error::Clock);
         }
-        let mut spec =
-            Fork::from_decision(&cert.binding, &self.snapshot.slot, decision, now, false)?;
+        let mut spec = Fork::from_decision(
+            &cert.binding,
+            &self.snapshot.slot,
+            decision,
+            now,
+            false,
+            false,
+        )?;
         if spec.lineage != old.lineage
             || spec.parents != old.parents
             || !spec.members.is_subset(&old.members)
@@ -354,7 +427,7 @@ impl Threads {
     pub fn notification(&self) -> Option<cgrp::Notification> {
         self.snapshot.fork.as_ref().map(|f| f.band.notification)
     }
-    fn contacts(&self, contacts: &ctcs::Contacts) -> Result<()> {
+    pub(super) fn contacts(&self, contacts: &ctcs::Contacts) -> Result<()> {
         if contacts.binding() != &self.snapshot.binding || contacts.version() != self.expected {
             return Err(Error::Conflict);
         }
@@ -536,7 +609,10 @@ struct Transaction<'a, B: Backend> {
     store: &'a mut Store<B>,
     operation: [u8; 32],
     committed: Option<Committed>,
+    companion: Option<Companion<'a>>,
 }
+/// One more owner record written in the same shared checkpoint.
+pub(super) type Companion<'a> = (&'a str, &'a [u8], &'a [u8]);
 impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
     fn commit<'a>(
         &'a mut self,
@@ -562,8 +638,16 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
             };
             let matching = effects.contains(&expected_effect);
             if !matching
+                || effects.iter().any(|effect| {
+                    matches!(effect, Effect::Membership { group, .. } if group != &spec.group)
+                })
                 || snapshot.community() != candidate.snapshot.binding.community()
-                || snapshot.revision() != spec.revision
+                || snapshot.group_state(&spec.group)?.revision() != spec.revision
+            {
+                return Err(cgrp::Error::Authority);
+            }
+            if let Some(expected_context) = candidate.required_context
+                && snapshot.group_state(&spec.group)?.commitment()? != expected_context
             {
                 return Err(cgrp::Error::Authority);
             }
@@ -582,17 +666,17 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
             }
             let bytes =
                 Zeroizing::new(postcard::to_allocvec(snapshot).map_err(|_| cgrp::Error::Invalid)?);
+            let mut changes = vec![Change::Put {
+                owner: "cgrp",
+                key: b"snapshot.v1",
+                value: &bytes,
+            }];
+            if let Some((owner, key, value)) = self.companion {
+                changes.push(Change::Put { owner, key, value });
+            }
             self.committed = Some(
                 candidate
-                    .persist(
-                        self.store,
-                        self.operation,
-                        &[Change::Put {
-                            owner: "cgrp",
-                            key: b"snapshot.v1",
-                            value: &bytes,
-                        }],
-                    )
+                    .persist_now(self.store, self.operation, &changes)
                     .await
                     .map_err(|_| cgrp::Error::Reconcile)?,
             );
@@ -608,25 +692,48 @@ impl Candidate {
         groups: cgrp::Candidate,
         store: &mut Store<B>,
         operation: [u8; 32],
-        source: &impl PolicySource,
+        governance: (&impl PolicySource, &impl cgrp::Authority),
         clock: &mut impl ckmg::Clock,
+    ) -> Result<(Committed, cgrp::Snapshot, Vec<cgrp::CommittedEffect>)> {
+        self.commit_groups_with(keys, groups, store, operation, governance, clock, None)
+            .await
+    }
+    /// As `commit_groups`, with one more owner record (the Attend checkpoint)
+    /// in the same shared checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn commit_groups_with<B: Backend>(
+        self,
+        keys: &mut impl Custody,
+        groups: cgrp::Candidate,
+        store: &mut Store<B>,
+        operation: [u8; 32],
+        governance: (&impl PolicySource, &impl cgrp::Authority),
+        clock: &mut impl ckmg::Clock,
+        companion: Option<Companion<'_>>,
     ) -> Result<(Committed, cgrp::Snapshot, Vec<cgrp::CommittedEffect>)> {
         if !self.required_group {
             return Err(Error::State);
         }
         self.recheck(keys).await?;
         self.current_contacts(store)?;
+        let previous = cgrp::Snapshot::load(self.snapshot.binding.community(), store)
+            .map_err(storage_error)?;
+        groups.check_base(&previous).map_err(|_| Error::Conflict)?;
         let now = now(clock)?;
+        groups
+            .revalidate(governance.0, governance.1, now)
+            .map_err(authority_error)?;
         let spec = self.snapshot.fork.as_ref().ok_or(Error::State)?;
         if now >= spec.preparation_until {
             return Err(Error::Authority);
         }
-        spec.current(&self.snapshot.binding, source, now)?;
+        spec.current(&self.snapshot.binding, governance.0, now)?;
         let mut transaction = Transaction {
             candidate: Some(self),
             store,
             operation,
             committed: None,
+            companion,
         };
         let (snapshot, effects) = groups
             .persist(&mut transaction, now)
@@ -692,6 +799,6 @@ impl Candidate {
             return Err(Error::Authority);
         }
         spec.current(&self.snapshot.binding, source, now(clock)?)?;
-        self.persist(store, operation, &[]).await
+        self.persist_now(store, operation, &[]).await
     }
 }

@@ -62,6 +62,7 @@ pub(super) async fn exercise(f: &mut Fixture, setup: &mut Setup, count: usize) {
             profile_visibility: true,
             valid_until: UNTIL,
             key_package: vec![],
+            lineage_handle: vec![],
             signature: vec![],
             authority: vec![],
         };

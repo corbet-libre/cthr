@@ -184,6 +184,7 @@ pub fn request(
             command_digest: r.command_digest().unwrap(),
             profile_visibility: visible,
             key_package: vec![],
+            lineage_handle: vec![],
             valid_until: now + DAY,
             signature: vec![],
             authority: vec![],

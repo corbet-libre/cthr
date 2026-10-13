@@ -189,6 +189,7 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
             profile_visibility: count == 42,
             valid_until: UNTIL,
             key_package: vec![],
+            lineage_handle: vec![],
             signature: vec![],
             authority: vec![],
         };

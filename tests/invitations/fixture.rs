@@ -48,6 +48,7 @@ impl Fixture {
             profile_visibility: true,
             valid_until: UNTIL,
             key_package: vec![],
+            lineage_handle: vec![],
             signature: vec![],
             authority: vec![],
         };

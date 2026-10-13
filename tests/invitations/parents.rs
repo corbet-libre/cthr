@@ -188,6 +188,7 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
             command_digest: request.command_digest().unwrap(),
             profile_visibility: count == 42,
             valid_until: UNTIL,
+            key_package: vec![],
             signature: vec![],
             authority: vec![],
         };

@@ -47,6 +47,7 @@ impl Fixture {
             command_digest: request.command_digest().unwrap(),
             profile_visibility: true,
             valid_until: UNTIL,
+            key_package: vec![],
             signature: vec![],
             authority: vec![],
         };

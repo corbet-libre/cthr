@@ -183,6 +183,7 @@ pub fn request(
             policy_epoch: 1,
             command_digest: r.command_digest().unwrap(),
             profile_visibility: visible,
+            key_package: vec![],
             valid_until: now + DAY,
             signature: vec![],
             authority: vec![],

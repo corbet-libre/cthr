@@ -466,7 +466,7 @@ dependencies = [
 [[package]]
 name = "cgrp"
 version = "0.1.0"
-source = "git+https://git.corbet.ch/corbet-foss/cgrp.git?branch=v01#4a48771e24ae6b7c5856153dd27c09d6cfc00d46"
+source = "git+https://git.corbet.ch/corbet-foss/cgrp.git?branch=v01#9f411dde3ae136397400163987d37fa7070467de"
 dependencies = [
  "ckmg",
  "cmbl",
@@ -596,7 +596,7 @@ dependencies = [
 [[package]]
 name = "ckmg"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/ckmg.git?branch=v01#ca1423d1d29466fdadd5f54dbf9b9afe17d02dd1"
+source = "git+https://git.corbet.ch/corbet-foss/ckmg.git?branch=v01#15510d5b2ba0b5dee50a22bf77b9804c27ea32ae"
 dependencies = [
  "blake3",
  "cdht",
@@ -648,7 +648,7 @@ dependencies = [
 [[package]]
 name = "cmbl"
 version = "0.1.0"
-source = "git+https://git.corbet.ch/corbet-foss/cmbl.git?branch=v01#1f35359af7c4874a8773ebc756579088f86131e1"
+source = "git+https://git.corbet.ch/corbet-foss/cmbl.git?branch=v01#a1b7c7341a50d3d19afc4b08642b8e33f466890e"
 dependencies = [
  "blake3",
  "blind-rsa-signatures",
@@ -858,7 +858,7 @@ dependencies = [
 [[package]]
 name = "crbk"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/crbk?branch=main#d3431a1bcf8f440be3f3ee0def7588ced2f752db"
+source = "git+https://git.corbet.ch/corbet-foss/crbk?branch=main#c3701ed4f9976ef13ea4039f8d298cfd1d294965"
 dependencies = [
  "semver",
  "serde",
@@ -1034,7 +1034,7 @@ dependencies = [
 [[package]]
 name = "ctnd"
 version = "0.1.0"
-source = "git+https://git.corbet.ch/corbet-foss/ctnd.git?branch=v01#dd5eed917533dbd7da44d280786cec19f7060cbc"
+source = "git+https://git.corbet.ch/corbet-foss/ctnd.git?branch=v01#fe939e796ca7d78d15a514e95d4378a3296b3948"
 dependencies = [
  "cgrp",
  "schemars",
@@ -3882,7 +3882,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",

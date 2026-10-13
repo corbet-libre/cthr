@@ -3,6 +3,7 @@ mod fork;
 mod group_context;
 pub mod invitation;
 mod room;
+pub use fork::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 pub use group_context::{ParentEvidence, VerifiedParent};
 pub mod keys;
 use ckmg::{Binding, KeyCertificate, Purpose, Scope};

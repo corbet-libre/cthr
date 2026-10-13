@@ -1,5 +1,7 @@
 //! Existing-member room transitions. Transport ordering belongs to Attend.
 use super::*;
+mod join;
+pub use join::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 
 impl Fork {
     fn room_successor(

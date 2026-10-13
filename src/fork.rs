@@ -1,6 +1,7 @@
 //! Immutable MLS forks driven by genuine Groups decisions and signed policy.
 use super::*;
 mod room;
+pub use room::{MAX_HANDOVER, RoomAdmission, RoomJoin};
 use cgrp::{Band, Effect, Level, PolicySource, PreparedEffect};
 use governor::{
     Quota, RateLimiter,

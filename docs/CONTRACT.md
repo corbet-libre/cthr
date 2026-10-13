@@ -175,6 +175,25 @@ operation. RFC 9420 section 12.2 does not permit GroupContextExtensions in an
 external Commit; the canonical context update follows in a member commit.
 Listing comparison and handover do not follow merely from this local checkpoint.
 
+Ordered external join (`prepare_room_join`, `receive_room_join`, `RoomJoin`,
+`RoomAdmission`). The newcomer proves, from a current member's `ParentEvidence`
+and the signed Groups join decision: exactly one added member (itself) on the
+next revision at the same level and policy epoch; the GroupInfo's authenticated
+context equals the previous canonical state; every tree device holds a current
+certificate for this community. Its leaf carries only its own scoped certificate
+(community, community pseudonym, per-community device key and purpose key). The
+external commit is an MLS PublicMessage (RFC 9420 section 12.4.3.2): an ordering
+server sees that pseudonymous leaf and encrypted path secrets, no plaintext.
+Existing members authenticate the ordered commit against their committed
+Groups/MLS state (external init only, one new member, no removals), then one
+member commits the canonical context (`commit_context`) and the others verify it
+(`receive_context`); the newcomer verifies the same commit in `RoomJoin::finish`
+and seals its hand-over items (at most `MAX_HANDOVER`) as MLS application
+messages in the resulting epoch. All three states stay in memory as one pending
+operation and become visible only through the single shared Groups/Threads
+checkpoint; a lost operation is discarded and restarted. The join counter and
+Assembly receipts belong to Attend/Link, history to the existing-member sender.
+
 The candidate retains the commitment actually bound into MLS for genesis and
 room updates. At the final shared transaction, the supplied Groups candidate
 must have that exact canonical commitment, not merely matching membership

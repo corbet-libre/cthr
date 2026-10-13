@@ -18,6 +18,7 @@ use support::{Guard, Machine, Time, create, machine, prf};
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 const SLOT: [u8; 32] = [17; 32];
+const COMPANION: &[u8] = b"signed-join-request";
 fn stage(name: &str) {
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_test::console_log!("{name}");

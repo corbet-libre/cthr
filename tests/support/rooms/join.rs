@@ -160,6 +160,7 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
                 &mut d.port(),
                 &decision.prepare_effects()[0],
                 &evidence,
+                COMPANION,
                 &source,
                 &mut clock,
             )
@@ -204,6 +205,7 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
                     &mut d.port(),
                     &join(&state).prepare_effects()[0],
                     $evidence,
+                    COMPANION,
                     &source,
                     &mut clock,
                 )
@@ -270,6 +272,7 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
                         store,
                         &groups.prepare_effects()[0],
                         &external,
+                        COMPANION,
                         &mut clock,
                     )
                     .await
@@ -287,11 +290,31 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
                     &astore,
                     &join(&state).prepare_effects()[0],
                     &corrupted,
+                    COMPANION,
                     &mut clock,
                 )
                 .await
                 .is_err()
         );
+
+        // The commit authenticates its companion: another or no companion, and
+        // so another consent, never produces an admission.
+        for wrong in [&b"another-join-request"[..], &[][..]] {
+            assert!(
+                genesis
+                    .threads()
+                    .receive_room_join(
+                        &mut a.port(),
+                        &astore,
+                        &join(&state).prepare_effects()[0],
+                        &external,
+                        wrong,
+                        &mut clock,
+                    )
+                    .await
+                    .is_err()
+            );
+        }
 
         let committer = admissions.remove(0);
         let groups = join(&state);

@@ -60,13 +60,28 @@ pub struct RoomJoin {
     threads: Threads,
     next: Fork,
     commit: Vec<u8>,
+    companion: Vec<u8>,
     epoch: u64,
+}
+
+/// The commit's authenticated data: binds the exact companion (the newcomer's
+/// signed Groups `Join` request) to this group's external commit. An admitting
+/// member recomputes it from the companion it received with the commit.
+fn companion_binding(slot: &[u8; 32], companion: &[u8]) -> Vec<u8> {
+    let mut bytes = b"cthr.room.join.companion.v1\0".to_vec();
+    bytes.extend_from_slice(slot);
+    bytes.extend_from_slice(companion);
+    ckmg::hash(&bytes).value().to_vec()
 }
 
 impl RoomJoin {
     /// The external commit for the ordering link (a PublicMessage by RFC 9420).
     pub fn commit(&self) -> &[u8] {
         &self.commit
+    }
+    /// The companion the commit authenticates (ordered together with it).
+    pub fn companion(&self) -> &[u8] {
+        &self.companion
     }
     /// The MLS epoch this commit creates.
     pub fn epoch(&self) -> u64 {
@@ -280,10 +295,11 @@ impl Threads {
         keys: &mut impl Custody,
         decision: &PreparedEffect<'_>,
         evidence: &ParentEvidence,
+        companion: &[u8],
         source: &impl PolicySource,
         clock: &mut impl ckmg::Clock,
     ) -> Result<RoomJoin> {
-        if self.snapshot.group.is_some() {
+        if self.snapshot.group.is_some() || companion.is_empty() {
             return Err(Error::State);
         }
         bounded_wire(&evidence.group_info)?;
@@ -342,6 +358,7 @@ impl Threads {
                 check_signer(&signer, &cert)?;
                 let signer = ScopedSigner(signer);
                 let (group, bundle) = MlsGroup::external_commit_builder()
+                    .with_aad(companion_binding(&self.snapshot.slot, companion))
                     .with_ratchet_tree(tree)
                     .with_config(config().join_config().clone())
                     .build_group(&working.0, info, credential)
@@ -376,6 +393,7 @@ impl Threads {
             threads: chain(candidate),
             next,
             commit,
+            companion: companion.to_vec(),
             epoch,
         })
     }
@@ -390,8 +408,12 @@ impl Threads {
         store: &Store<B>,
         decision: &PreparedEffect<'_>,
         wire: &[u8],
+        companion: &[u8],
         clock: &mut impl ckmg::Clock,
     ) -> Result<RoomAdmission> {
+        if companion.is_empty() {
+            return Err(Error::Authority);
+        }
         let message = parse(wire)?
             .try_into_protocol_message()
             .map_err(encoding_error)?;
@@ -408,7 +430,9 @@ impl Threads {
         let processed = group
             .process_message(&working.0, message)
             .map_err(crypto_error)?;
-        if !matches!(processed.sender(), Sender::NewMemberCommit) {
+        if !matches!(processed.sender(), Sender::NewMemberCommit)
+            || processed.aad() != companion_binding(&self.snapshot.slot, companion)
+        {
             return Err(Error::Authority);
         }
         let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() else {

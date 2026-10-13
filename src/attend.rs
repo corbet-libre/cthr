@@ -93,6 +93,9 @@ pub struct JoinParts<'a, K, B: Backend, S, A, C, F> {
     pub counter: u64,
     /// Encrypted to the room after the join: profile keys and the like.
     pub handover: Vec<Vec<u8>>,
+    /// The signed Groups `Join` request: the external commit authenticates it
+    /// and members admit the newcomer only with it.
+    pub companion: Vec<u8>,
     /// Distinguishes this attempt's shared checkpoint.
     pub operation: [u8; 32],
 }
@@ -110,6 +113,7 @@ struct Inner<'a, K, B: Backend, S, A, C, F> {
     ordering: [u8; 16],
     counter: u64,
     handover: Vec<Vec<u8>>,
+    companion: Vec<u8>,
     operation: [u8; 32],
     /// Store version after this attempt's own last write; foreign writes since
     /// then refuse the final checkpoint.
@@ -146,6 +150,7 @@ where
             ordering: parts.ordering,
             counter: parts.counter,
             handover: parts.handover,
+            companion: parts.companion,
             operation: parts.operation,
             version: Cell::new(None),
             prepared: RefCell::new(None),
@@ -230,6 +235,7 @@ where
                     &mut **keys,
                     decision,
                     inner.evidence,
+                    &inner.companion,
                     inner.source,
                     &mut **clock,
                 )
@@ -240,7 +246,8 @@ where
                 inner.counter,
                 join.commit().to_vec(),
                 join.epoch(),
-            )?;
+            )?
+            .with_companion(join.companion().to_vec())?;
             let epoch = join.epoch();
             *inner.prepared.borrow_mut() = Some((join, epoch));
             Ok(prepared)
@@ -260,6 +267,7 @@ where
                 .take()
                 .ok_or(ctnd::Error::Invalid)?;
             if request.encrypted_commit != join.commit()
+                || request.companion != join.companion()
                 || reply.ordering != inner.ordering
                 || request.ordering != inner.ordering
                 || inner.counter.checked_add(1) != Some(reply.counter)

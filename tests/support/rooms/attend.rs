@@ -210,6 +210,7 @@ fn flow(corrupt: bool) {
                             self.store,
                             &groups.prepare_effects()[0],
                             &wire,
+                            COMPANION,
                             &mut clock,
                         )
                         .await
@@ -270,6 +271,7 @@ fn flow(corrupt: bool) {
                 ordering: [9; 16],
                 counter: 7,
                 handover: vec![],
+                companion: COMPANION.to_vec(),
                 operation: [51; 32],
             });
             let mut threads = session.threads();
@@ -278,6 +280,7 @@ fn flow(corrupt: bool) {
                 ordering: [9; 16],
                 expected: 7,
                 encrypted_commit: vec![1],
+                companion: COMPANION.to_vec(),
             };
             let reply = ctnd::OrderReply {
                 ordering: [9; 16],
@@ -342,6 +345,7 @@ fn flow(corrupt: bool) {
             ordering: [9; 16],
             counter: 7,
             handover: vec![b"profile key".to_vec()],
+            companion: COMPANION.to_vec(),
             operation: [50; 32],
         });
         let room = [5; 16];
@@ -413,5 +417,59 @@ fn flow(corrupt: bool) {
             groups.group_state(&SLOT).unwrap().members(),
             &group_support::members(0, 4)
         );
+
+        // Leaving: Groups, the Threads state and the Attend withdrawal change
+        // together in one commit.
+        let after = Threads::load(d.binding.clone(), SLOT, &dstore).unwrap();
+        let mut attend = after.stored_attend(&dstore).unwrap().unwrap();
+        assert_eq!(attend.phase(), &ctnd::Phase::Joined);
+        let leave = cgrp::prepare(
+            &groups,
+            &group_support::request(
+                &groups,
+                cgrp::Command::Leave { group: SLOT },
+                "m3",
+                group_support::members(3, 4),
+                true,
+                1000,
+            ),
+            &source,
+            &group_support::TestAuthority,
+            1000,
+            10,
+        )
+        .unwrap();
+        let mut lclock = Time::default();
+        let version = dstore.version().unwrap();
+        let snapshot = cthr::leave_room(
+            &mut attend,
+            cthr::LeaveParts {
+                store: &mut dstore,
+                threads: &after,
+                groups: leave,
+                source: &source,
+                authority: &group_support::TestAuthority,
+                clock: &mut lclock,
+                operation: [52; 32],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attend.phase(), &ctnd::Phase::Withdrawn);
+        assert!(dstore.version().unwrap() > version);
+        assert!(
+            !snapshot
+                .group_state(&SLOT)
+                .unwrap()
+                .members()
+                .contains("m3")
+        );
+        let stored: ctnd::Checkpoint =
+            postcard::from_bytes(dstore.read("ctnd", &SLOT).unwrap().unwrap()).unwrap();
+        assert_eq!(stored.phase(), &ctnd::Phase::Withdrawn);
+        assert!(dstore.read("cthr", &SLOT).unwrap().is_none());
+        // Nothing of the room is left to resume or to read.
+        let gone = Threads::load(d.binding.clone(), SLOT, &dstore).unwrap();
+        assert!(gone.epoch().is_err());
     }));
 }

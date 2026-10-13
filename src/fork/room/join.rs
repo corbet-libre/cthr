@@ -398,6 +398,37 @@ impl Threads {
         })
     }
 
+    /// Existing member, before any Groups decision: the leaf credential the
+    /// newcomer's ordered external commit carries. The commit is processed on a
+    /// throw-away working group (nothing is merged or stored) and must be a
+    /// new-member commit that authenticates exactly `companion`. The returned
+    /// certificate is UNTRUSTED: the caller reads the newcomer's lineage and
+    /// verifies it through `Custody::verify` (as `receive_room_join` does again)
+    /// before anything it states is believed.
+    pub fn room_join_credential(&self, wire: &[u8], companion: &[u8]) -> Result<KeyCertificate> {
+        if companion.is_empty() {
+            return Err(Error::Authority);
+        }
+        let message = parse(wire)?
+            .try_into_protocol_message()
+            .map_err(encoding_error)?;
+        let working = self.working()?;
+        let mut group = self.group(&working)?;
+        let processed = group
+            .process_message(&working.0, message)
+            .map_err(crypto_error)?;
+        if !matches!(processed.sender(), Sender::NewMemberCommit)
+            || processed.aad() != companion_binding(&self.snapshot.slot, companion)
+        {
+            return Err(Error::Authority);
+        }
+        let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() else {
+            return Err(Error::Authority);
+        };
+        let leaf = staged.update_path_leaf_node().ok_or(Error::Authority)?;
+        decode_credential(leaf.credential(), leaf.signature_key().as_slice())
+    }
+
     /// Existing member: authenticate the newcomer's ordered external commit
     /// against this member's exact committed Groups/MLS state. Only the
     /// external init, from the one added member with a certified community

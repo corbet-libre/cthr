@@ -123,6 +123,7 @@ impl Published {
                     &custody,
                     &cpfl::PortableCodec,
                     &clean,
+                    &|_: &str| None,
                 )
             })
             .await

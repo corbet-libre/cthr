@@ -43,9 +43,6 @@ impl<A: cgrp::Authority> cgrp::Authority for InvitationAuthority<'_, A> {
     fn contact(&self, community: &str, member: &str, contact: &str, now: u64) -> cgrp::Result<()> {
         self.original.contact(community, member, contact, now)
     }
-    fn seed(&self, community: &str, group: &cgrp::Id, now: u64) -> cgrp::Result<()> {
-        self.original.seed(community, group, now)
-    }
     fn parent(
         &self,
         state: &cgrp::GroupState,

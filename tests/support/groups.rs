@@ -150,13 +150,6 @@ impl Authority for TestAuthority {
             Err(Error::Authority)
         }
     }
-    fn seed(&self, community: &str, group: &Id, _: u64) -> Result<()> {
-        if community == "alpha" && *group != [255; 32] {
-            Ok(())
-        } else {
-            Err(Error::Authority)
-        }
-    }
 }
 
 pub fn request(
@@ -196,4 +189,103 @@ pub fn request(
         r.consents.push(c);
     }
     r
+}
+
+/// Memory-only durable store: applies every candidate and keeps the last one.
+#[derive(Default)]
+pub struct Keep(pub Option<Snapshot>);
+impl Persistence for Keep {
+    fn commit<'a>(
+        &'a mut self,
+        _: u64,
+        candidate: &'a Snapshot,
+        _: &'a [Effect],
+    ) -> CommitFuture<'a> {
+        Box::pin(async move {
+            self.0 = Some(candidate.clone());
+            Ok(Commit::Applied)
+        })
+    }
+}
+
+/// The two hidden groups every room grows out of (the product has no seed
+/// rooms): a circle `[1; 32]` of twelve, extended by consent to the in-group
+/// `[2; 32]` of thirteen. All twelve and thirteen members consent, none shows a
+/// profile. Rooms are then opened with `open_room`.
+pub async fn open_base(source: &SignedPolicy) -> Snapshot {
+    let empty = Snapshot::empty("alpha".into());
+    let circle = request(
+        &empty,
+        Command::Create {
+            id: [1; 32],
+            members: members(0, 12),
+        },
+        "m0",
+        members(0, 12),
+        false,
+        500,
+    );
+    let mut keep = Keep::default();
+    let (state, _) = prepare(&empty, &circle, source, &TestAuthority, 1000, 10)
+        .unwrap()
+        .persist(&mut keep, 1000)
+        .await
+        .unwrap();
+    let grow = request(
+        &state,
+        Command::Fork {
+            id: [2; 32],
+            parents: vec![[1; 32]],
+            members: members(0, 13),
+            kind: ForkKind::Add,
+        },
+        "m0",
+        members(0, 13),
+        false,
+        600,
+    );
+    prepare(&state, &grow, source, &TestAuthority, 1000, 10)
+        .unwrap()
+        .persist(&mut keep, 1000)
+        .await
+        .unwrap()
+        .0
+}
+
+/// The request that opens room `id` with the first three members of the base
+/// in-group (the three who consent to be seen), effective at `at`.
+pub fn open_room(base: &Snapshot, id: Id, at: u64) -> Request {
+    request(
+        base,
+        Command::Fork {
+            id,
+            parents: vec![[2; 32]],
+            members: members(0, 3),
+            kind: ForkKind::Open,
+        },
+        "m0",
+        members(0, 3),
+        true,
+        at,
+    )
+}
+
+/// Put `base` into a device's durable store as its accepted Groups snapshot,
+/// as the checkpoint of a device that already took part in the base groups.
+pub async fn install_base(store: &mut cwst::Store<cwst::backend::Memory>, base: &Snapshot) {
+    let version = store.version().unwrap();
+    let bytes = postcard::to_allocvec(base).unwrap();
+    store
+        .commit(
+            version,
+            [250; 32],
+            &[cwst::Change::Put {
+                owner: "cgrp",
+                key: b"snapshot.v1",
+                value: &bytes,
+            }],
+            &[],
+        )
+        .await
+        .unwrap();
 }

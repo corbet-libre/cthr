@@ -35,7 +35,6 @@ impl Fixture {
             command: cgrp::Command::Create {
                 id: [61; 32],
                 members: ["alice".into(), "bob".into(), "carol".into()].into(),
-                seed: false,
             },
             consents: vec![],
         };

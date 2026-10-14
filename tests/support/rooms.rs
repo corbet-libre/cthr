@@ -6,8 +6,8 @@ mod join;
 #[path = "rooms/update.rs"]
 mod update;
 
-// The existing fixture Authority verifies real signed Groups consents and
-// owns a configured seed scope. It is not the production admin/seed issuer.
+// The fixture Authority verifies real signed Groups consents; a room grows out
+// of a circle and an in-group by consent forks, with no seed path.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn consented_room_genesis_commits_real_mls_and_groups_together() {
@@ -19,6 +19,11 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
         let (_, mut astore) = a.store().await;
         let (_, mut bstore) = b.store().await;
         let (_, mut cstore) = c.store().await;
+        let source = group_support::SignedPolicy::new(&group_support::policy());
+        let base = group_support::open_base(&source).await;
+        group_support::install_base(&mut astore, &base).await;
+        group_support::install_base(&mut bstore, &base).await;
+        group_support::install_base(&mut cstore, &base).await;
         let at = Threads::load(a.binding.clone(), SLOT, &astore).unwrap();
         let bt = Threads::load(b.binding.clone(), SLOT, &bstore).unwrap();
         let ct = Threads::load(c.binding.clone(), SLOT, &cstore).unwrap();
@@ -45,26 +50,11 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
                 bytes.clone()
             })
             .collect();
-        let source = group_support::SignedPolicy::new(&group_support::policy());
         let empty = cgrp::Snapshot::empty("alpha".into());
-        let request = |seed, at| {
-            group_support::request(
-                &empty,
-                cgrp::Command::Create {
-                    id: SLOT,
-                    members: group_support::members(0, 3),
-                    seed,
-                },
-                "m0",
-                group_support::members(0, 3),
-                seed,
-                at,
-            )
-        };
-        let public_request = request(true, 1000);
+        let public_request = group_support::open_room(&base, SLOT, 1000);
         let prepare = || {
             cgrp::prepare(
-                &empty,
+                &base,
                 &public_request,
                 &source,
                 &group_support::TestAuthority,
@@ -73,9 +63,20 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
             )
             .unwrap()
         };
+        let private_request = group_support::request(
+            &empty,
+            cgrp::Command::Create {
+                id: SLOT,
+                members: group_support::members(0, 3),
+            },
+            "m0",
+            group_support::members(0, 3),
+            false,
+            1000,
+        );
         let private = cgrp::prepare(
             &empty,
-            &request(false, 1000),
+            &private_request,
             &source,
             &group_support::TestAuthority,
             1000,
@@ -174,8 +175,8 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
         );
 
         let mismatched = cgrp::prepare(
-            &empty,
-            &request(true, 999),
+            &base,
+            &group_support::open_room(&base, SLOT, 999),
             &source,
             &group_support::TestAuthority,
             1000,
@@ -242,7 +243,7 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
             .await
             .unwrap();
         assert_eq!(verified.state(), &state.group_state(&SLOT).unwrap());
-        assert_eq!(verified.state().level(), cgrp::Level::Public);
+        assert_eq!(verified.state().level(), cgrp::Level::Opening);
         // Merely receiving this real parent does not enroll the third member.
         assert!(
             cp.threads()

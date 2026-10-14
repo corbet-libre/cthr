@@ -332,6 +332,37 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             astate.group_state(&SLOT).unwrap().members(),
             &group_support::members(0, 4)
         );
+        // A relay delivers the room state next to MLS evidence: the state's
+        // commitment must be the one the GroupInfo context authenticates.
+        // Evidence of another epoch with the other epoch's state is a different
+        // group state; mixing either half with the other epoch is refused, and
+        // nothing is written by the check.
+        let verified = dt
+            .verify_room_state(&mut d.port(), &evidence)
+            .await
+            .unwrap();
+        assert_eq!(
+            verified.commitment().unwrap(),
+            state.group_state(&SLOT).unwrap().commitment().unwrap()
+        );
+        let later = committed
+            .threads()
+            .parent_evidence(&mut a.port(), &astore, &source, &mut clock)
+            .await
+            .unwrap();
+        assert_ne!(later.state, evidence.state);
+        let other_state = cthr::ParentEvidence {
+            state: later.state.clone(),
+            group_info: evidence.group_info.clone(),
+            ratchet_tree: evidence.ratchet_tree.clone(),
+        };
+        assert!(dt.verify_room_state(&mut d.port(), &other_state).await.is_err());
+        let other_epoch = cthr::ParentEvidence {
+            state: evidence.state.clone(),
+            group_info: later.group_info.clone(),
+            ratchet_tree: later.ratchet_tree.clone(),
+        };
+        assert!(dt.verify_room_state(&mut d.port(), &other_epoch).await.is_err());
         let mut finished = vec![];
         for (fixture, store, admission) in [
             (&mut b, &mut bstore, admissions.remove(0)),

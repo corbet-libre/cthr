@@ -9,7 +9,6 @@ pub(super) async fn refuses_mixed_context(
     clock: &mut Time,
 ) {
     let base = group_support::history();
-    group_support::install(store, &base).await;
     let installed = store.read("cgrp", b"snapshot.v1").unwrap().map(<[u8]>::to_vec);
     let prepare = |at| {
         let request = group_support::request(

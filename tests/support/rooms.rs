@@ -257,7 +257,9 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
             .await
             .unwrap();
         assert_eq!(verified.state(), &state.group_state(&SLOT).unwrap());
-        assert_eq!(verified.state().level(), cgrp::Level::Public);
+        // Organically opened rooms start in the Opening level (Fork Open); they
+        // were Public from the start only while seed rooms existed.
+        assert_eq!(verified.state().level(), cgrp::Level::Opening);
         // Merely receiving this real parent does not enroll the third member.
         assert!(
             cp.threads()

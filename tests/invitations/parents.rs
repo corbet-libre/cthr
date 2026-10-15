@@ -191,7 +191,7 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
     for (step, (command, size)) in history.into_iter().enumerate() {
         let request = cgrp::Request {
             operation: [200 + u8::try_from(step).unwrap(); 32],
-            parents: vec![],
+            parents: state.parent_references(&command).unwrap(),
             effective_at: NOW,
             actor: "alice".into(),
             command,
@@ -218,7 +218,7 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
     };
     let request = cgrp::Request {
         operation: [80; 32],
-        parents: vec![],
+        parents: state.parent_references(&command).unwrap(),
         effective_at: NOW,
         actor: "alice".into(),
         command,

@@ -16,6 +16,10 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
         let (_, mut bstore) = b.store().await;
         let (_, mut cstore) = c.store().await;
         let (_, mut dstore) = d.store().await;
+        let base = group_support::history();
+        group_support::install(&mut astore, &base).await;
+        group_support::install(&mut bstore, &base).await;
+        group_support::install(&mut cstore, &base).await;
         let source = group_support::SignedPolicy::new(&group_support::policy());
         let mut clock = Time::default();
         let at = Threads::load(a.binding.clone(), SLOT, &astore).unwrap();
@@ -37,8 +41,6 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             packages.push(bytes.clone());
             held.push(package);
         }
-        let base = group_support::history();
-        group_support::install(&mut astore, &base).await;
         let create = || {
             let request = group_support::request(
                 &base,

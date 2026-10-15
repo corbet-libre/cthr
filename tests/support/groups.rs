@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use cgrp::*;
+use futures::FutureExt as _;
 use ed25519_dalek::{Signer, SigningKey};
 use std::collections::BTreeSet;
 
@@ -233,10 +234,13 @@ pub fn history() -> Snapshot {
     ];
     for (i, command) in steps.into_iter().enumerate() {
         let consenters = if i == 0 { members(0, 12) } else { members(0, 13) };
-        let r = request(&state, command, "m0", consenters, false, 1000);
-        let prepared = prepare(&state, &r, &source, &TestAuthority, 1000, 10).unwrap();
+        let r = request(&state, command, "m0", consenters, false, 100);
+        let prepared = prepare(&state, &r, &source, &TestAuthority, 100, 10).unwrap();
         let mut store = Memory(postcard::to_allocvec(&state).unwrap(), state.revision());
-        state = futures::executor::block_on(prepared.persist(&mut store, 1000))
+        state = prepared
+            .persist(&mut store, 100)
+            .now_or_never()
+            .expect("memory persistence is immediate")
             .unwrap()
             .0;
     }
@@ -275,7 +279,10 @@ pub async fn install(store: &mut cwst::Store<cwst::backend::Memory>, snapshot: &
 /// Commit a prepared Groups decision on top of `state` and return the new checkpoint.
 pub fn advance(state: &Snapshot, prepared: Candidate, now: u64) -> Snapshot {
     let mut store = Memory(postcard::to_allocvec(state).unwrap(), state.revision());
-    futures::executor::block_on(prepared.persist(&mut store, now))
+    prepared
+        .persist(&mut store, now)
+        .now_or_never()
+        .expect("memory persistence is immediate")
         .unwrap()
         .0
 }

@@ -150,13 +150,6 @@ impl Authority for TestAuthority {
             Err(Error::Authority)
         }
     }
-    fn seed(&self, community: &str, group: &Id, _: u64) -> Result<()> {
-        if community == "alpha" && *group != [255; 32] {
-            Ok(())
-        } else {
-            Err(Error::Authority)
-        }
-    }
 }
 
 pub fn request(
@@ -195,4 +188,94 @@ pub fn request(
         r.consents.push(c);
     }
     r
+}
+
+// A member does not start in a public room. The room descends from a circle
+// that grew into an ingroup, then opened (Fork Open), exactly as in production.
+pub const CIRCLE: Id = [200; 32];
+pub const INGROUP: Id = [201; 32];
+
+struct Memory(Vec<u8>, u64);
+impl Persistence for Memory {
+    fn commit<'a>(
+        &'a mut self,
+        expected: u64,
+        candidate: &'a Snapshot,
+        _: &'a [Effect],
+    ) -> CommitFuture<'a> {
+        Box::pin(async move {
+            if expected != self.1 {
+                return Ok(Commit::Conflict);
+            }
+            self.0 = postcard::to_allocvec(candidate).unwrap();
+            self.1 = candidate.revision();
+            Ok(Commit::Applied)
+        })
+    }
+}
+
+/// The accepted Groups checkpoint before the room opens: a circle of twelve
+/// that added one more member and became an ingroup of thirteen.
+pub fn history() -> Snapshot {
+    let source = SignedPolicy::new(&policy());
+    let mut state = Snapshot::empty("alpha".into());
+    let steps = [
+        Command::Create {
+            id: CIRCLE,
+            members: members(0, 12),
+        },
+        Command::Fork {
+            id: INGROUP,
+            parents: vec![CIRCLE],
+            members: members(0, 13),
+            kind: ForkKind::Add,
+        },
+    ];
+    for (i, command) in steps.into_iter().enumerate() {
+        let consenters = if i == 0 { members(0, 12) } else { members(0, 13) };
+        let r = request(&state, command, "m0", consenters, false, 1000);
+        let prepared = prepare(&state, &r, &source, &TestAuthority, 1000, 10).unwrap();
+        let mut store = Memory(postcard::to_allocvec(&state).unwrap(), state.revision());
+        state = futures::executor::block_on(prepared.persist(&mut store, 1000))
+            .unwrap()
+            .0;
+    }
+    state
+}
+
+/// The command that opens the room `slot` from the ingroup, with `size` members.
+pub fn open(slot: Id, size: usize) -> Command {
+    Command::Fork {
+        id: slot,
+        parents: vec![INGROUP],
+        members: members(0, size),
+        kind: ForkKind::Open,
+    }
+}
+
+/// Put an accepted Groups checkpoint into a member's encrypted Store.
+pub async fn install(store: &mut cwst::Store<cwst::backend::Memory>, snapshot: &Snapshot) {
+    let bytes = postcard::to_allocvec(snapshot).unwrap();
+    let operation = *ckmg::hash(&bytes).value();
+    store
+        .commit(
+            store.version().unwrap(),
+            operation,
+            &[cwst::Change::Put {
+                owner: "cgrp",
+                key: b"snapshot.v1",
+                value: &bytes,
+            }],
+            &[],
+        )
+        .await
+        .unwrap();
+}
+
+/// Commit a prepared Groups decision on top of `state` and return the new checkpoint.
+pub fn advance(state: &Snapshot, prepared: Candidate, now: u64) -> Snapshot {
+    let mut store = Memory(postcard::to_allocvec(state).unwrap(), state.revision());
+    futures::executor::block_on(prepared.persist(&mut store, now))
+        .unwrap()
+        .0
 }

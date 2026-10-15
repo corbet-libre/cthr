@@ -2,7 +2,7 @@
 use super::*;
 
 /// Adds only missing-parent authorization to an existing genuine Groups
-/// authority. Consent, contact and seed decisions remain with that owner.
+/// authority. Consent and contact decisions remain with that owner.
 /// Borrowing this adapter is not a lease across awaits: refresh the exact
 /// invitation, Charter, Contacts and MLS evidence before each later use.
 pub struct InvitationAuthority<'a, A> {
@@ -42,9 +42,6 @@ impl<A: cgrp::Authority> cgrp::Authority for InvitationAuthority<'_, A> {
     }
     fn contact(&self, community: &str, member: &str, contact: &str, now: u64) -> cgrp::Result<()> {
         self.original.contact(community, member, contact, now)
-    }
-    fn seed(&self, community: &str, group: &cgrp::Id, now: u64) -> cgrp::Result<()> {
-        self.original.seed(community, group, now)
     }
     fn parent(
         &self,

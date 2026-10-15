@@ -77,8 +77,8 @@ The Groups companion is canonical Postcard 1, owner cgrp/key snapshot.v1.
 
 `Candidate::commit_groups` takes `(PolicySource, Groups Authority)` as its
 governance argument and repeats the original Groups authorization after all
-asynchronous custody checks. Expired/revoked consent, changed contacts or seed
-authority, changed signed policy and elapsed opening deadlines refuse before
+asynchronous custody checks. Expired/revoked consent, changed contacts,
+changed signed policy and elapsed opening deadlines refuse before
 storage. The transaction also refuses membership effects for any second group:
 a single MLS candidate cannot publish another group's unapplied transition.
 
@@ -247,7 +247,7 @@ existing authority. Its sealed parents retain the exact recipient, operation,
 command digest, canonical state, authenticated Charter policy epoch, observation
 second and original expiry. The Groups owner passes its actual selected Policy
 to the parent check; its epoch must equal the sealed Charter epoch. All
-consent/contact/seed checks still delegate to the original owner. A later
+consent and contact checks still delegate to the original owner. A later
 preparation or revalidation needs freshly verified invitation evidence; an
 old capability cannot cross an observed second or renew its lifetime. This
 adapter does not commit a Groups snapshot or authorize a complete fork count.

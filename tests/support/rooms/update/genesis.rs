@@ -8,22 +8,20 @@ pub(super) async fn refuses_mixed_context(
     source: &group_support::SignedPolicy,
     clock: &mut Time,
 ) {
-    let empty = cgrp::Snapshot::empty("alpha".into());
+    let base = group_support::history();
+    group_support::install(store, &base).await;
+    let installed = store.read("cgrp", b"snapshot.v1").unwrap().map(<[u8]>::to_vec);
     let prepare = |at| {
         let request = group_support::request(
-            &empty,
-            cgrp::Command::Create {
-                id: SLOT,
-                members: group_support::members(0, 3),
-                seed: true,
-            },
+            &base,
+            group_support::open(SLOT, 3),
             "m0",
             group_support::members(0, 3),
             true,
             at,
         );
         cgrp::prepare(
-            &empty,
+            &base,
             &request,
             source,
             &group_support::TestAuthority,
@@ -52,7 +50,10 @@ pub(super) async fn refuses_mixed_context(
             .is_err()
     );
     assert_eq!(store.version().unwrap(), prior);
-    assert!(store.read("cgrp", b"snapshot.v1").unwrap().is_none());
+    assert_eq!(
+        store.read("cgrp", b"snapshot.v1").unwrap().map(<[u8]>::to_vec),
+        installed
+    );
     assert!(
         Threads::load(a.binding.clone(), SLOT, store)
             .unwrap()

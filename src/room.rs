@@ -3,7 +3,7 @@ use super::*;
 
 impl Threads {
     /// Create the initial Opening/Public MLS group from the complete consented
-    /// roster. The genuine Groups decision includes seed/opening authority and
+    /// roster. The genuine Groups decision includes opening authority and
     /// profile-visibility consent. Outputs require the existing shared Groups
     /// and Threads checkpoint before release.
     ///

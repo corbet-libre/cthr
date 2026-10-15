@@ -89,7 +89,6 @@ pub(super) async fn exercise(f: &mut Fixture, setup: &mut Setup, count: usize) {
             })
             .collect(),
         contacts: &setup.contacts,
-        seed: None,
     };
     let base = cgrp::Snapshot::load("alpha", &f.store).unwrap();
     assert_eq!(base.revision(), 0);

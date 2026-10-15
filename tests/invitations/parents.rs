@@ -30,7 +30,6 @@ impl ctcs::DeviceAuthority for Directory {
 struct Groups<'a> {
     devices: BTreeMap<String, [u8; 32]>,
     contacts: &'a ctcs::Contacts,
-    seed: Option<[u8; 64]>,
 }
 impl cgrp::Authority for Groups<'_> {
     fn consent(&self, consent: &cgrp::Consent, now: u64) -> cgrp::Result<()> {
@@ -67,20 +66,6 @@ impl cgrp::Authority for Groups<'_> {
         }
         Ok(())
     }
-    fn seed(&self, community: &str, group: &cgrp::Id, now: u64) -> cgrp::Result<()> {
-        if now >= UNTIL {
-            return Err(cgrp::Error::Authority);
-        }
-        let signature = self.seed.as_ref().ok_or(cgrp::Error::Authority)?;
-        ckmg::verify_ed25519(
-            &ed25519_dalek::SigningKey::from_bytes(&[229; 32])
-                .verifying_key()
-                .to_bytes(),
-            &seed_bytes(community, group),
-            signature,
-        )
-        .map_err(|_| cgrp::Error::Authority)
-    }
 }
 fn port<'a>(
     peer: &'a mut keys::Peer,
@@ -99,11 +84,6 @@ fn port<'a>(
         devices: directory,
     }
 }
-fn seed_bytes(community: &str, group: &cgrp::Id) -> Vec<u8> {
-    serde_json::to_vec(&("fixture.groups.seed", community, group, 2u64, UNTIL)).unwrap()
-}
-// The existing Groups external seed boundary uses an explicitly signed fixture
-// grant for its one configured group. It is not a production operator issuer.
 pub struct Setup {
     source: group_support::SignedPolicy,
     store: cwst::Store<cwst::backend::Memory>,
@@ -111,6 +91,32 @@ pub struct Setup {
     directory: Directory,
     peers: Vec<keys::Peer>,
     contacts: ctcs::Contacts,
+}
+async fn consented<'a>(
+    mut request: cgrp::Request,
+    signers: impl Iterator<Item = &'a mut keys::Peer>,
+    visible: bool,
+) -> cgrp::Request {
+    for peer in signers {
+        let mut consent = cgrp::Consent {
+            community: "alpha".into(),
+            member: peer.binding.member().into(),
+            operation: request.operation,
+            policy_epoch: 2,
+            command_digest: request.command_digest().unwrap(),
+            profile_visibility: visible,
+            valid_until: UNTIL,
+            key_package: vec![],
+            signature: vec![],
+            authority: vec![],
+        };
+        consent.signature = peer
+            .sign(&consent.signing_bytes().unwrap(), UNTIL)
+            .await
+            .to_vec();
+        request.consents.push(consent);
+    }
+    request
 }
 pub async fn install(f: &mut Fixture, count: usize) -> Setup {
     assert!(matches!(count, 12 | 42));
@@ -134,22 +140,10 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
     };
     let mut store = contacts::store().await;
     contacts::establish(&mut f.sender, "bob", &mut store).await;
-    if count == 12 {
-        for peer in &peers {
-            contacts::establish(&mut f.sender, peer.binding.member(), &mut store).await;
-        }
+    for peer in &peers {
+        contacts::establish(&mut f.sender, peer.binding.member(), &mut store).await;
     }
     let contacts = ctcs::Contacts::load(f.sender.binding.clone(), &store).unwrap();
-    let seed = if count == 42 {
-        use ed25519_dalek::Signer as _;
-        Some(
-            ed25519_dalek::SigningKey::from_bytes(&[229; 32])
-                .sign(&seed_bytes("alpha", &[81; 32]))
-                .to_bytes(),
-        )
-    } else {
-        None
-    };
     let authority = Groups {
         devices: std::iter::once(&f.sender)
             .chain(peers.iter())
@@ -161,43 +155,77 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
             })
             .collect(),
         contacts: &contacts,
-        seed,
     };
     let mut policy = group_support::policy();
     policy.epoch = 2;
     let source = group_support::SignedPolicy::new(&policy);
-    let state = cgrp::Snapshot::empty("alpha".into());
-    let mut request = cgrp::Request {
+    let mut state = cgrp::Snapshot::empty("alpha".into());
+    let names: Vec<String> = std::iter::once(&f.sender)
+        .chain(peers.iter())
+        .map(|peer| peer.binding.member().to_owned())
+        .collect();
+    // A room is never founded directly: a circle of twelve grows into an
+    // ingroup of forty-two, which then opens (Fork Open) as the room.
+    let history = if count == 42 {
+        vec![
+            (
+                cgrp::Command::Create {
+                    id: [79; 32],
+                    members: names[..12].iter().cloned().collect(),
+                },
+                12,
+            ),
+            (
+                cgrp::Command::Fork {
+                    id: [78; 32],
+                    parents: vec![[79; 32]],
+                    members: roster.clone(),
+                    kind: cgrp::ForkKind::Add,
+                },
+                42,
+            ),
+        ]
+    } else {
+        vec![]
+    };
+    for (step, (command, size)) in history.into_iter().enumerate() {
+        let request = cgrp::Request {
+            operation: [200 + u8::try_from(step).unwrap(); 32],
+            parents: vec![],
+            effective_at: NOW,
+            actor: "alice".into(),
+            command,
+            consents: vec![],
+        };
+        let signers = std::iter::once(&mut f.sender).chain(peers.iter_mut()).take(size);
+        let request = consented(request, signers, false).await;
+        let prepared = cgrp::prepare(&state, &request, &source, &authority, NOW, 10).unwrap();
+        state = group_support::advance(&state, prepared, NOW);
+    }
+    group_support::install(&mut store, &state).await;
+    let command = if count == 42 {
+        cgrp::Command::Fork {
+            id: [81; 32],
+            parents: vec![[78; 32]],
+            members: roster.clone(),
+            kind: cgrp::ForkKind::Open,
+        }
+    } else {
+        cgrp::Command::Create {
+            id: [81; 32],
+            members: roster.clone(),
+        }
+    };
+    let request = cgrp::Request {
         operation: [80; 32],
         parents: vec![],
         effective_at: NOW,
         actor: "alice".into(),
-        command: cgrp::Command::Create {
-            id: [81; 32],
-            members: roster.clone(),
-            seed: count == 42,
-        },
+        command,
         consents: vec![],
     };
-    for peer in std::iter::once(&mut f.sender).chain(peers.iter_mut()) {
-        let mut consent = cgrp::Consent {
-            community: "alpha".into(),
-            member: peer.binding.member().into(),
-            operation: request.operation,
-            policy_epoch: 2,
-            command_digest: request.command_digest().unwrap(),
-            profile_visibility: count == 42,
-            valid_until: UNTIL,
-            key_package: vec![],
-            signature: vec![],
-            authority: vec![],
-        };
-        consent.signature = peer
-            .sign(&consent.signing_bytes().unwrap(), UNTIL)
-            .await
-            .to_vec();
-        request.consents.push(consent);
-    }
+    let signers = std::iter::once(&mut f.sender).chain(peers.iter_mut());
+    let request = consented(request, signers, count == 42).await;
     let groups = cgrp::prepare(&state, &request, &source, &authority, NOW, 10).unwrap();
     let mut packages = vec![];
     for (index, peer) in peers.iter_mut().enumerate() {

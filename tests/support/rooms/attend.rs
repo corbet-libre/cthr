@@ -49,22 +49,19 @@ fn flow(corrupt: bool) {
             packages.push(bytes.clone());
             held.push(package);
         }
-        let empty = cgrp::Snapshot::empty("alpha".into());
+        let base = group_support::history();
+        group_support::install(&mut astore, &base).await;
         let create = || {
             let request = group_support::request(
-                &empty,
-                cgrp::Command::Create {
-                    id: SLOT,
-                    members: group_support::members(0, 3),
-                    seed: true,
-                },
+                &base,
+                group_support::open(SLOT, 3),
                 "m0",
                 group_support::members(0, 3),
                 true,
                 1000,
             );
             cgrp::prepare(
-                &empty,
+                &base,
                 &request,
                 &source,
                 &group_support::TestAuthority,

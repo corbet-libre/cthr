@@ -1096,7 +1096,6 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             cgrp::Command::Create {
                 id: SLOT,
                 members: group_support::members(0, 3),
-                seed: false,
             },
             "m0",
             group_support::members(0, 3),
@@ -1117,20 +1116,17 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
         let groups = prepare();
         let effects = groups.prepare_effects();
         let mut clock = Time::default();
+        let base = group_support::history();
         let public_request = group_support::request(
-            &empty,
-            cgrp::Command::Create {
-                id: SLOT,
-                members: group_support::members(0, 3),
-                seed: true,
-            },
+            &base,
+            group_support::open(SLOT, 3),
             "m0",
             group_support::members(0, 3),
             true,
             1000,
         );
         let public = cgrp::prepare(
-            &empty,
+            &base,
             &public_request,
             &source,
             &group_support::TestAuthority,
@@ -1310,7 +1306,6 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             cgrp::Command::Create {
                 id: [18; 32],
                 members: group_support::members(0, 3),
-                seed: false,
             },
             "m0",
             group_support::members(0, 3),
@@ -1445,7 +1440,6 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             cgrp::Command::Create {
                 id: SLOT,
                 members: group_support::members(0, 3),
-                seed: false,
             },
             "m0",
             group_support::members(0, 3),
@@ -2141,7 +2135,6 @@ fn fork_owner_checkpoint_boundaries() {
             cgrp::Command::Create {
                 id: SLOT,
                 members: group_support::members(0, 3),
-                seed: false,
             },
             "m0",
             group_support::members(0, 3),
@@ -2305,7 +2298,6 @@ async fn malformed_fork_receipt_refuses(
         cgrp::Command::Create {
             id: SLOT,
             members: group_support::members(0, 3),
-            seed: false,
         },
         "m0",
         group_support::members(0, 3),
@@ -2587,7 +2579,6 @@ async fn fork_checkpoint_refusals(
         cgrp::Command::Create {
             id: SLOT,
             members: group_support::members(0, 3),
-            seed: false,
         },
         "m0",
         group_support::members(0, 3),

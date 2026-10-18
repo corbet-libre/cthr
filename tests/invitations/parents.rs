@@ -107,6 +107,7 @@ async fn consented<'a>(
             profile_visibility: visible,
             valid_until: UNTIL,
             key_package: vec![],
+            lineage_handle: vec![],
             signature: vec![],
             authority: vec![],
         };

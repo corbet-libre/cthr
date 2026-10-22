@@ -12,6 +12,7 @@
 //! purpose key). No other identifier enters a leaf.
 use super::*;
 use openmls::group::PublicGroup;
+use openmls::messages::group_info::VerifiableGroupInfo;
 
 /// Largest newcomer hand-over (profile keys, bounded history) per join.
 pub const MAX_HANDOVER: usize = 256;
@@ -285,6 +286,72 @@ async fn apply_context(
 }
 
 impl Threads {
+    /// Newcomer, before anything is prepared, signed or sent: authenticate the
+    /// delivered Groups state against the MLS evidence. The state's commitment
+    /// must be the one carried in the GroupInfo's authenticated context (same
+    /// group id, same epoch: the GroupInfo is signed for exactly one epoch), and
+    /// every certified device in the tree must match the state's roster. Writes
+    /// nothing; the returned state is the only one a Join may then name as its
+    /// parent.
+    pub async fn verify_room_state(
+        &self,
+        keys: &mut impl Custody,
+        evidence: &ParentEvidence,
+    ) -> Result<cgrp::GroupState> {
+        if self.snapshot.group.is_some() {
+            return Err(Error::State);
+        }
+        bounded_wire(&evidence.group_info)?;
+        bounded_wire(&evidence.ratchet_tree)?;
+        let cert = self.local(keys).await?;
+        Ok(self.verified_evidence(keys, &cert, evidence).await?.0)
+    }
+
+    async fn verified_evidence(
+        &self,
+        keys: &mut impl Custody,
+        cert: &KeyCertificate,
+        evidence: &ParentEvidence,
+    ) -> Result<(cgrp::GroupState, VerifiableGroupInfo, RatchetTreeIn)> {
+        let state = cgrp::GroupState::decode(&evidence.state).map_err(encoding_error)?;
+        if state.id() != &self.snapshot.slot {
+            return Err(Error::Authority);
+        }
+        let info = match parse(&evidence.group_info)?.extract() {
+            MlsMessageBodyIn::GroupInfo(info) => info,
+            _ => return Err(Error::Encoding),
+        };
+        let tree =
+            RatchetTreeIn::tls_deserialize_exact(&evidence.ratchet_tree).map_err(encoding_error)?;
+        let isolated = OpenMlsRustCrypto::default();
+        let (imported, _) = PublicGroup::from_external(
+            isolated.crypto(),
+            isolated.storage(),
+            tree.clone(),
+            info.clone(),
+            ProposalStore::new(),
+        )
+        .map_err(crypto_error)?;
+        group_context::verify_context(imported.group_context(), &state)?;
+        let mut roster = BTreeSet::new();
+        for member in imported.members() {
+            let certificate = decode_credential(&member.credential, &member.signature_key)?;
+            if certificate.binding.community() != cert.binding.community()
+                || certificate.binding == cert.binding
+                || !roster.insert(certificate.binding.member().to_owned())
+            {
+                return Err(Error::Authority);
+            }
+            keys.verify(&certificate).await?;
+        }
+        if &roster != state.members() {
+            return Err(Error::Authority);
+        }
+        Ok((state, info, tree))
+    }
+}
+
+impl Threads {
     /// Newcomer: join the room by an external commit built from an existing
     /// member's `ParentEvidence`. The evidence is checked against the signed
     /// Groups join decision (exactly one added member, this one, on the next
@@ -321,34 +388,8 @@ impl Threads {
             return Err(Error::Authority);
         }
         next.current(&cert.binding, source, at)?;
-        let info = match parse(&evidence.group_info)?.extract() {
-            MlsMessageBodyIn::GroupInfo(info) => info,
-            _ => return Err(Error::Encoding),
-        };
-        let tree =
-            RatchetTreeIn::tls_deserialize_exact(&evidence.ratchet_tree).map_err(encoding_error)?;
-        let isolated = OpenMlsRustCrypto::default();
-        let (imported, _) = PublicGroup::from_external(
-            isolated.crypto(),
-            isolated.storage(),
-            tree.clone(),
-            info.clone(),
-            ProposalStore::new(),
-        )
-        .map_err(crypto_error)?;
-        group_context::verify_context(imported.group_context(), &state)?;
-        let mut roster = BTreeSet::new();
-        for member in imported.members() {
-            let certificate = decode_credential(&member.credential, &member.signature_key)?;
-            if certificate.binding.community() != cert.binding.community()
-                || certificate.binding == cert.binding
-                || !roster.insert(certificate.binding.member().to_owned())
-            {
-                return Err(Error::Authority);
-            }
-            keys.verify(&certificate).await?;
-        }
-        if &roster != state.members() {
+        let (verified, info, tree) = self.verified_evidence(keys, &cert, evidence).await?;
+        if verified.commitment().map_err(authority_error)? != state.commitment().map_err(authority_error)? {
             return Err(Error::Authority);
         }
         let working = self.working()?;

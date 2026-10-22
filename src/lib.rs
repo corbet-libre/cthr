@@ -392,6 +392,11 @@ impl Threads {
     pub fn history(&self) -> &[Message] {
         &self.snapshot.accepted
     }
+    /// Own sends that wait for the recipient's accepted receipt, oldest first
+    /// (`accepted_at` is 0). They join `history` when the receipt is accepted.
+    pub fn pending(&self) -> &[Message] {
+        &self.snapshot.pending
+    }
     pub fn epoch(&self) -> Result<u64> {
         let working = self.working()?;
         Ok(self.group(&working)?.epoch().as_u64())

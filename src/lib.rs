@@ -401,6 +401,20 @@ impl Threads {
         let working = self.working()?;
         Ok(self.group(&working)?.epoch().as_u64())
     }
+    /// The room transport key of the current epoch: an MLS exporter secret every
+    /// member of the epoch derives alike. It wraps the ordered join frames so the
+    /// ordering server relays only ciphertext; a newcomer receives it inside the
+    /// sealed room state, never in the clear.
+    pub fn transport_key(&self) -> Result<[u8; 32]> {
+        let working = self.working()?;
+        let group = self.group(&working)?;
+        let secret = Zeroizing::new(
+            group
+                .export_secret(working.0.crypto(), "cthr.room.transport.v1", &[], 32)
+                .map_err(crypto_error)?,
+        );
+        secret.as_slice().try_into().map_err(|_| Error::State)
+    }
     fn working(&self) -> Result<Working> {
         let working = Working(OpenMlsRustCrypto::default());
         {

@@ -880,12 +880,17 @@ fn real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets() {
         receipt.signature[0] ^= 1;
         let acknowledged = sent.threads().acknowledge(&id, &receipt).unwrap();
         assert!(sent.threads().history().is_empty());
+        // The send is visible as pending until the receipt is committed.
+        assert_eq!(sent.threads().pending().len(), 1);
+        assert_eq!(sent.threads().pending()[0].bytes, b"hello");
+        assert_eq!(sent.threads().pending()[0].accepted_at, 0);
         assert!(acknowledged.prepared_message().is_none());
         let acked = acknowledged
             .commit(&mut a.port(), &mut grant, &mut astore, [10; 32], &[])
             .await
             .unwrap();
         assert_eq!(acked.threads().history()[0].bytes, b"hello");
+        assert!(acked.threads().pending().is_empty());
         assert!(acked.accepted().is_empty());
         assert!(acked.outgoing().is_empty());
         assert_eq!(

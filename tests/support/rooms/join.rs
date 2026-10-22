@@ -397,10 +397,13 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
         );
         // The room transport key is the epoch's exporter secret: every member of
         // the epoch derives the same one, and it changes with the epoch.
-        let key = djoined.threads().transport_key().unwrap();
-        assert_eq!(key, committed.threads().transport_key().unwrap());
-        assert_eq!(key, finished[0].threads().transport_key().unwrap());
-        assert_ne!(key, genesis.threads().transport_key().unwrap());
+        let key = djoined.threads().transport_keys().unwrap();
+        assert_eq!(key, committed.threads().transport_keys().unwrap());
+        assert_eq!(key, finished[0].threads().transport_keys().unwrap());
+        assert_ne!(key, genesis.threads().transport_keys().unwrap());
+        // The nonce key is a separate exporter secret, never the AEAD key.
+        assert_ne!(key.aead, key.nonce);
+        assert_ne!(key.nonce, genesis.threads().transport_keys().unwrap().nonce);
         let handover = djoined.outgoing()[0].bytes().to_vec();
         assert!(!handover.windows(11).any(|v| v == b"profile key"));
         let contacts = ctcs::Contacts::load(b.binding.clone(), &bstore).unwrap();

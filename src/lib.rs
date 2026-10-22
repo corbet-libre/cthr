@@ -21,6 +21,26 @@ use std::collections::BTreeSet;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use zeroize::{Zeroize, Zeroizing};
 
+/// Exporter label of the room transport AEAD key.
+const TRANSPORT_AEAD_LABEL: &str = "cthr.room.transport.aead.v1";
+/// Exporter label of the room transport nonce key. Distinct from the AEAD label.
+const TRANSPORT_NONCE_LABEL: &str = "cthr.room.transport.nonce.v1";
+
+/// The two room transport secrets of one epoch, derived under distinct exporter
+/// labels. `aead` seals the frame, `nonce` keys the synthetic nonce.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportKeys {
+    pub aead: [u8; 32],
+    pub nonce: [u8; 32],
+}
+
+impl std::fmt::Debug for TransportKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TransportKeys(..)")
+    }
+}
+
 const OWNER: &str = "cthr";
 const MAX_WIRE: usize = 1024 * 1024;
 const MAX_CHECKPOINT: usize = cwst::MAX_VALUE_BYTES;
@@ -401,19 +421,27 @@ impl Threads {
         let working = self.working()?;
         Ok(self.group(&working)?.epoch().as_u64())
     }
-    /// The room transport key of the current epoch: an MLS exporter secret every
-    /// member of the epoch derives alike. It wraps the ordered join frames so the
-    /// ordering server relays only ciphertext; a newcomer receives it inside the
-    /// sealed room state, never in the clear.
-    pub fn transport_key(&self) -> Result<[u8; 32]> {
+    /// The room transport keys of the current epoch: MLS exporter secrets every
+    /// member of the epoch derives alike. They wrap the ordered join frames so
+    /// the ordering server relays only ciphertext; a newcomer receives them
+    /// inside the sealed room state, never in the clear. The AEAD key and the
+    /// nonce key come from distinct exporter labels, so the key that hides the
+    /// plaintext is never also the key that derives the nonce.
+    pub fn transport_keys(&self) -> Result<TransportKeys> {
         let working = self.working()?;
         let group = self.group(&working)?;
-        let secret = Zeroizing::new(
-            group
-                .export_secret(working.0.crypto(), "cthr.room.transport.v1", &[], 32)
-                .map_err(crypto_error)?,
-        );
-        secret.as_slice().try_into().map_err(|_| Error::State)
+        let derive = |label: &str| -> Result<[u8; 32]> {
+            let secret = Zeroizing::new(
+                group
+                    .export_secret(working.0.crypto(), label, &[], 32)
+                    .map_err(crypto_error)?,
+            );
+            secret.as_slice().try_into().map_err(|_| Error::State)
+        };
+        Ok(TransportKeys {
+            aead: derive(TRANSPORT_AEAD_LABEL)?,
+            nonce: derive(TRANSPORT_NONCE_LABEL)?,
+        })
     }
     fn working(&self) -> Result<Working> {
         let working = Working(OpenMlsRustCrypto::default());

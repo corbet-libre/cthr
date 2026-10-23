@@ -171,6 +171,46 @@ impl Threads {
         .await
     }
 
+    /// The certified leaf credential `member` holds in this device's current MLS
+    /// tree (read-only). UNTRUSTED until the caller verifies it through
+    /// `Custody::verify`: a departing member's signed Groups `Leave` counts only
+    /// from the device key this leaf certifies.
+    pub fn room_member_credential(&self, member: &str) -> Result<KeyCertificate> {
+        let working = self.working()?;
+        let group = self.group(&working)?;
+        group
+            .members()
+            .filter_map(|leaf| decode_credential(&leaf.credential, &leaf.signature_key).ok())
+            .find(|cert| cert.binding.member() == member)
+            .ok_or(Error::Authority)
+    }
+
+    /// Whether `wire` is an authentic member commit of this device's epoch that
+    /// removes THIS device's own leaf (read-only: it is processed on a
+    /// throw-away working group, nothing is merged or stored). The sender must
+    /// be a certified member. A forged or damaged commit is an error, never
+    /// `true`.
+    pub async fn room_removes_me(&self, keys: &mut impl Custody, wire: &[u8]) -> Result<bool> {
+        let message = parse(wire)?
+            .try_into_protocol_message()
+            .map_err(encoding_error)?;
+        let working = self.working()?;
+        let mut group = self.group(&working)?;
+        let processed = group
+            .process_message(&working.0, message)
+            .map_err(crypto_error)?;
+        let sender = match processed.sender() {
+            Sender::Member(index) => group.member_at(*index).ok_or(Error::Authority)?,
+            _ => return Err(Error::Authority),
+        };
+        let sender = decode_credential(processed.credential(), &sender.signature_key)?;
+        keys.verify(&sender).await?;
+        let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() else {
+            return Err(Error::Authority);
+        };
+        Ok(staged.self_removed())
+    }
+
     async fn room_base<B: Backend>(
         &self,
         keys: &mut impl Custody,

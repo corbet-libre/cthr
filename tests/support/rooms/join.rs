@@ -372,13 +372,21 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             group_info: evidence.group_info.clone(),
             ratchet_tree: evidence.ratchet_tree.clone(),
         };
-        assert!(dt.verify_room_state(&mut d.port(), &other_state).await.is_err());
+        assert!(
+            dt.verify_room_state(&mut d.port(), &other_state)
+                .await
+                .is_err()
+        );
         let other_epoch = cthr::ParentEvidence {
             state: evidence.state.clone(),
             group_info: later.group_info.clone(),
             ratchet_tree: later.ratchet_tree.clone(),
         };
-        assert!(dt.verify_room_state(&mut d.port(), &other_epoch).await.is_err());
+        assert!(
+            dt.verify_room_state(&mut d.port(), &other_epoch)
+                .await
+                .is_err()
+        );
         let mut finished = vec![];
         for (fixture, store, admission) in [
             (&mut b, &mut bstore, admissions.remove(0)),
@@ -528,7 +536,14 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             .seal_room_secret(&mut b.port(), &source, &mut clock, b"member key")
             .await
             .unwrap()
-            .commit_room_secret(&mut b.port(), &mut bstore, [33; 32], &source, &mut clock, &[])
+            .commit_room_secret(
+                &mut b.port(),
+                &mut bstore,
+                [33; 32],
+                &source,
+                &mut clock,
+                &[],
+            )
             .await
             .unwrap();
         assert_eq!(

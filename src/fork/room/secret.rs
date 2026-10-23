@@ -7,7 +7,7 @@
 //! A secret never enters the accepted history: that history is what a later
 //! newcomer may be given, and a key must not travel in it. Opening one advances
 //! the MLS state (the secret-tree ratchet) and records an event without
-//! content. The caller reads the plaintext from the returned [`RoomSecret`],
+//! content. Neither direction leaves a pending output in the Store. The caller reads the plaintext from the returned [`RoomSecret`],
 //! stores it under its own custody and commits both in one Store transaction
 //! through [`Candidate::commit_room_secret`]; a candidate that is dropped
 //! changes nothing.
@@ -190,6 +190,12 @@ impl Candidate {
         {
             return Err(Error::Authority);
         }
-        self.persist_now(store, operation, companions).await
+        let mut staged = self.persist(store, operation)?;
+        // The caller delivers a sealed message from the committed result and
+        // nothing re-publishes it from the Store, so no pending output is kept:
+        // the Store holds a bounded number of them, and every opened or sealed
+        // secret would otherwise take one.
+        staged.outputs.clear();
+        staged.write(store, operation, companions).await
     }
 }

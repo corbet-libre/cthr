@@ -451,6 +451,7 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
         // The same hand-over as a room secret (row 14.5): the sender is the
         // certified leaf m3 and the epoch the join epoch; the secret reaches the
         // caller's own record and never the accepted history.
+        let pending = cstore.load_pending().unwrap().len();
         let (candidate, secret) = finished[1]
             .threads()
             .open_room_secret(&mut c.port(), &source, &mut clock, &handover)
@@ -475,6 +476,8 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             .await
             .unwrap();
         assert!(kept.threads().history().is_empty());
+        // No pending output: the Store keeps only a bounded number of them.
+        assert_eq!(cstore.load_pending().unwrap().len(), pending);
         assert_eq!(
             cstore.read("test.secret", b"m3").unwrap(),
             Some(&b"profile key"[..])
@@ -510,6 +513,7 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
                 .err(),
             Some(Error::Limit)
         );
+        let pending = bstore.load_pending().unwrap().len();
         let sealed = received
             .threads()
             .seal_room_secret(&mut b.port(), &source, &mut clock, b"member key")
@@ -522,6 +526,7 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             sealed.threads().history().len(),
             received.threads().history().len()
         );
+        assert_eq!(bstore.load_pending().unwrap().len(), pending);
         let wire = sealed.outgoing()[0].bytes().to_vec();
         assert!(!wire.windows(10).any(|v| v == b"member key"));
         let (_, secret) = djoined

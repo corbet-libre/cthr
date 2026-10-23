@@ -36,6 +36,9 @@ pub struct LeaveParts<'a, B: Backend, S, A, C> {
     pub clock: &'a mut C,
     /// Distinguishes this leave's shared checkpoint.
     pub operation: [u8; 32],
+    /// Owners whose record under this room's slot is deleted in the same commit:
+    /// the caller's room-scoped grants (such as the room's profile keys).
+    pub dependents: &'a [&'static str],
 }
 
 struct Leave<'a, B: Backend, S, A> {
@@ -46,6 +49,7 @@ struct Leave<'a, B: Backend, S, A> {
     authority: &'a A,
     now: u64,
     operation: [u8; 32],
+    dependents: &'a [&'static str],
     outcome: Option<cgrp::Snapshot>,
 }
 
@@ -55,6 +59,7 @@ struct Transaction<'a, B: Backend> {
     group: cgrp::Id,
     member: String,
     operation: [u8; 32],
+    dependents: &'a [&'static str],
     attend: &'a [u8],
 }
 
@@ -98,28 +103,28 @@ impl<B: Backend> cgrp::Persistence for Transaction<'_, B> {
             let bytes =
                 Zeroizing::new(postcard::to_allocvec(snapshot).map_err(|_| cgrp::Error::Invalid)?);
             let version = self.store.version().map_err(|_| cgrp::Error::Reconcile)?;
+            let mut changes = vec![
+                Change::Put {
+                    owner: "cgrp",
+                    key: b"snapshot.v1",
+                    value: &bytes,
+                },
+                Change::Delete {
+                    owner: OWNER,
+                    key: &self.slot,
+                },
+                Change::Put {
+                    owner: ATTEND_OWNER,
+                    key: &self.slot,
+                    value: self.attend,
+                },
+            ];
+            changes.extend(self.dependents.iter().map(|owner| Change::Delete {
+                owner,
+                key: &self.slot,
+            }));
             self.store
-                .commit(
-                    version,
-                    self.operation,
-                    &[
-                        Change::Put {
-                            owner: "cgrp",
-                            key: b"snapshot.v1",
-                            value: &bytes,
-                        },
-                        Change::Delete {
-                            owner: OWNER,
-                            key: &self.slot,
-                        },
-                        Change::Put {
-                            owner: ATTEND_OWNER,
-                            key: &self.slot,
-                            value: self.attend,
-                        },
-                    ],
-                    &[],
-                )
+                .commit(version, self.operation, &changes, &[])
                 .await
                 .map_err(|_| cgrp::Error::Reconcile)?;
             Ok(cgrp::Commit::Applied)
@@ -167,6 +172,7 @@ impl<B: Backend, S: PolicySource, A: cgrp::Authority> ctnd::Persistence for Leav
                 group: slot,
                 member: self.threads.snapshot.binding.member().to_owned(),
                 operation: self.operation,
+                dependents: self.dependents,
                 attend: &bytes,
             };
             let (snapshot, _) = groups
@@ -200,6 +206,7 @@ where
         authority: parts.authority,
         now,
         operation: parts.operation,
+        dependents: parts.dependents,
         outcome: None,
     };
     attend.withdraw(&mut leave).await?;

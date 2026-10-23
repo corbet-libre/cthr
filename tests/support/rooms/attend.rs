@@ -439,6 +439,23 @@ fn flow(corrupt: bool) {
         )
         .unwrap();
         let mut lclock = Time::default();
+        // A room-scoped grant of the caller leaves with the room, in one commit.
+        let held = dstore.version().unwrap();
+        dstore
+            .commit(
+                held,
+                [54; 32],
+                &[cwst::Change::Put {
+                    owner: "test.grant",
+                    key: &SLOT,
+                    value: b"grant",
+                }],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(dstore.read("test.grant", &SLOT).unwrap().is_some());
+        let after = Threads::load(d.binding.clone(), SLOT, &dstore).unwrap();
         let version = dstore.version().unwrap();
         let snapshot = cthr::leave_room(
             &mut attend,
@@ -450,12 +467,14 @@ fn flow(corrupt: bool) {
                 authority: &group_support::TestAuthority,
                 clock: &mut lclock,
                 operation: [52; 32],
+                dependents: &["test.grant"],
             },
         )
         .await
         .unwrap();
         assert_eq!(attend.phase(), &ctnd::Phase::Withdrawn);
         assert!(dstore.version().unwrap() > version);
+        assert_eq!(dstore.read("test.grant", &SLOT).unwrap(), None);
         assert!(
             !snapshot
                 .group_state(&SLOT)

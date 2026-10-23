@@ -22,6 +22,7 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
         let base = group_support::history();
         group_support::install(&mut astore, &base).await;
         group_support::install(&mut bstore, &base).await;
+        group_support::install(&mut cstore, &base).await;
         let at = Threads::load(a.binding.clone(), SLOT, &astore).unwrap();
         let bt = Threads::load(b.binding.clone(), SLOT, &bstore).unwrap();
         let ct = Threads::load(c.binding.clone(), SLOT, &cstore).unwrap();
@@ -246,6 +247,27 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
             state.group_state(&SLOT).unwrap(),
             bstate.group_state(&SLOT).unwrap()
         );
+        // The third member joins from the same Welcome: the room it will be
+        // removed from has a real MLS leaf for it.
+        let cgroups = prepare();
+        let effects = cgroups.prepare_effects();
+        let candidate = cp
+            .threads()
+            .join_room(&mut c.port(), &effects[0], welcome, &mut clock)
+            .await
+            .unwrap();
+        drop(effects);
+        candidate
+            .commit_groups(
+                &mut c.port(),
+                cgroups,
+                &mut cstore,
+                [2; 32],
+                (&source, &group_support::TestAuthority),
+                &mut clock,
+            )
+            .await
+            .unwrap();
         let parent = joined
             .threads()
             .parent_evidence(&mut a.port(), &astore, &source, &mut clock)
@@ -318,7 +340,8 @@ fn consented_room_genesis_commits_real_mls_and_groups_together() {
         update::removal(
             &mut a,
             &mut b,
-            (&mut astore, &mut bstore),
+            &mut c,
+            (&mut astore, &mut bstore, &mut cstore),
             &state,
             &source,
             &mut clock,

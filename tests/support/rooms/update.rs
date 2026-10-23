@@ -19,12 +19,13 @@ pub(super) async fn genesis_mismatch(
 pub(super) async fn removal(
     a: &mut Fixture,
     b: &mut Fixture,
-    stores: (&mut Store<Memory>, &mut Store<Memory>),
+    c: &mut Fixture,
+    stores: (&mut Store<Memory>, &mut Store<Memory>, &mut Store<Memory>),
     state: &cgrp::Snapshot,
     source: &group_support::SignedPolicy,
     clock: &mut Time,
 ) {
-    let (astore, bstore) = stores;
+    let (astore, bstore, cstore) = stores;
     clock.0.set(1003);
     let prepare = |at| prepare(state, source, at);
     let at = Threads::load(a.binding.clone(), SLOT, astore).unwrap();
@@ -124,6 +125,33 @@ pub(super) async fn removal(
         bstate.group_state(&SLOT).unwrap()
     );
     assert_eq!(received.threads().epoch().unwrap(), old_epoch + 1);
+
+    // The removed member (m2) holds the old epoch only. The commit names the
+    // epoch it was made for, the survivors share the next epoch's transport
+    // key, and nothing the removed member holds derives it: it cannot process
+    // the commit that removed it and its state does not move.
+    assert_eq!(cthr::wire_epoch(&wire).unwrap(), old_epoch);
+    let removed = Threads::load(c.binding.clone(), SLOT, cstore).unwrap();
+    assert_eq!(removed.epoch().unwrap(), old_epoch);
+    let stale = removed.transport_keys().unwrap();
+    let fresh = committed.threads().transport_keys().unwrap();
+    assert!(received.threads().transport_keys().unwrap() == fresh);
+    assert!(stale.aead != fresh.aead && stale.nonce != fresh.nonce);
+    assert!(
+        removed
+            .receive_room_update(
+                &mut c.port(),
+                cstore,
+                &prepare(1001).prepare_effects()[0],
+                &wire,
+                clock
+            )
+            .await
+            .is_err()
+    );
+    let after = Threads::load(c.binding.clone(), SLOT, cstore).unwrap();
+    assert_eq!(after.epoch().unwrap(), old_epoch);
+    assert!(after.transport_keys().unwrap() == stale);
     assert_eq!(
         received
             .threads()

@@ -335,6 +335,15 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             panic!()
         };
         let context = bytes.clone();
+        // The public header names the epoch each commit was made for: the join
+        // for the epoch it enters from, the member commit for the next one. A
+        // member that catches up applies a commit only to exactly that epoch.
+        let parent_epoch = genesis.threads().epoch().unwrap();
+        assert_eq!(cthr::wire_epoch(&external).unwrap(), parent_epoch);
+        assert_eq!(cthr::wire_epoch(&context).unwrap(), parent_epoch + 1);
+        assert_eq!(committed.threads().epoch().unwrap(), parent_epoch + 2);
+        assert!(cthr::wire_epoch(&[]).is_err());
+        assert!(cthr::wire_epoch(b"not an MLS wire message").is_err());
         assert_eq!(
             astate.group_state(&SLOT).unwrap().members(),
             &group_support::members(0, 4)

@@ -447,5 +447,89 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
             .await
             .unwrap();
         assert_eq!(received.threads().history()[0].bytes, b"profile key");
+
+        // The same hand-over as a room secret (row 14.5): the sender is the
+        // certified leaf m3 and the epoch the join epoch; the secret reaches the
+        // caller's own record and never the accepted history.
+        let (candidate, secret) = finished[1]
+            .threads()
+            .open_room_secret(&mut c.port(), &source, &mut clock, &handover)
+            .await
+            .unwrap();
+        assert_eq!(secret.sender(), "m3");
+        assert_eq!(secret.epoch(), djoined.threads().epoch().unwrap());
+        assert_eq!(secret.bytes(), b"profile key");
+        let kept = candidate
+            .commit_room_secret(
+                &mut c.port(),
+                &mut cstore,
+                [32; 32],
+                &source,
+                &mut clock,
+                &[cwst::Change::Put {
+                    owner: "test.secret",
+                    key: b"m3",
+                    value: secret.bytes(),
+                }],
+            )
+            .await
+            .unwrap();
+        assert!(kept.threads().history().is_empty());
+        assert_eq!(
+            cstore.read("test.secret", b"m3").unwrap(),
+            Some(&b"profile key"[..])
+        );
+        // A message opens once: the ratchet moved on, and a replay is refused.
+        assert!(
+            kept.threads()
+                .open_room_secret(&mut c.port(), &source, &mut clock, &handover)
+                .await
+                .is_err()
+        );
+        // The sender cannot open its own message, and noise opens nothing.
+        assert!(
+            djoined
+                .threads()
+                .open_room_secret(&mut d.port(), &source, &mut clock, &handover)
+                .await
+                .is_err()
+        );
+        assert!(
+            kept.threads()
+                .open_room_secret(&mut c.port(), &source, &mut clock, b"noise")
+                .await
+                .is_err()
+        );
+
+        // An existing member answers in the same epoch; the newcomer opens it.
+        assert_eq!(
+            received
+                .threads()
+                .seal_room_secret(&mut b.port(), &source, &mut clock, &[])
+                .await
+                .err(),
+            Some(Error::Limit)
+        );
+        let sealed = received
+            .threads()
+            .seal_room_secret(&mut b.port(), &source, &mut clock, b"member key")
+            .await
+            .unwrap()
+            .commit_room_secret(&mut b.port(), &mut bstore, [33; 32], &source, &mut clock, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            sealed.threads().history().len(),
+            received.threads().history().len()
+        );
+        let wire = sealed.outgoing()[0].bytes().to_vec();
+        assert!(!wire.windows(10).any(|v| v == b"member key"));
+        let (_, secret) = djoined
+            .threads()
+            .open_room_secret(&mut d.port(), &source, &mut clock, &wire)
+            .await
+            .unwrap();
+        assert_eq!(secret.sender(), "m1");
+        assert_eq!(secret.bytes(), b"member key");
     }));
 }

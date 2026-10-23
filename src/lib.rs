@@ -6,7 +6,7 @@ pub mod invitation;
 mod leave;
 mod room;
 pub use attend::{ContextFeed, JoinParts, JoinSession, SessionStore, SessionThreads};
-pub use fork::{MAX_HANDOVER, RoomAdmission, RoomJoin};
+pub use fork::{MAX_HANDOVER, MAX_ROOM_SECRET, RoomAdmission, RoomJoin, RoomSecret};
 pub use group_context::{ParentEvidence, VerifiedParent};
 pub use leave::{LeaveParts, leave_room};
 pub mod keys;
@@ -146,6 +146,11 @@ pub enum Event {
     },
     Joined,
     MembershipChanged,
+    /// A room secret was opened and the MLS state advanced past it. Carries
+    /// no content: the secret is only in the `RoomSecret` the caller received.
+    RoomSecret {
+        epoch: u64,
+    },
     /// Encrypted member commit authenticating the next complete room state.
     /// Like every output, it is released only after the shared checkpoint.
     MembershipCommit {

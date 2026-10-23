@@ -9,7 +9,7 @@ use governor::{
     nanos::Nanos,
     state::{NotKeyed, StateStore},
 };
-pub use room::{MAX_HANDOVER, RoomAdmission, RoomJoin};
+pub use room::{MAX_HANDOVER, MAX_ROOM_SECRET, RoomAdmission, RoomJoin, RoomSecret};
 use std::{cell::Cell, collections::BTreeMap, num::NonZeroU32, rc::Rc};
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -1039,6 +1039,17 @@ fn parse(wire: &[u8]) -> Result<MlsMessageIn> {
     MlsMessageIn::tls_deserialize_exact(wire).map_err(encoding_error)
 }
 
+/// The MLS epoch a wire message was framed for, read from its public header
+/// without processing it. A member that catches up applies an ordered commit
+/// only to the exact epoch it was made for: a frame of another epoch is never
+/// handed to the group, whatever it claims to be.
+pub fn wire_epoch(wire: &[u8]) -> Result<u64> {
+    let message = parse(wire)?
+        .try_into_protocol_message()
+        .map_err(encoding_error)?;
+    Ok(message.epoch().as_u64())
+}
+
 // Coarse upstream failure classification is shared across the real engine paths.
 fn crypto_error<E>(_: E) -> Error {
     Error::Crypto

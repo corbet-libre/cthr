@@ -82,6 +82,8 @@ impl Peer {
         }
     }
     pub async fn sign(&mut self, bytes: &[u8], until: u64) -> [u8; 64] {
+        // Device signatures are typed: the format is the one whose tag leads the bytes.
+        let format = ckmg::DeviceFormat::of(bytes).expect("a device format");
         let intent = self
             .admission
             .admit(
@@ -95,6 +97,7 @@ impl Peer {
                     target: None,
                     statement: None,
                     transcript: Some(bytes.to_vec()),
+                    format: Some(format),
                     expires: until,
                 },
                 self.time.0.get(),
@@ -102,7 +105,7 @@ impl Peer {
             .unwrap();
         let signature = self
             .keys
-            .sign_device_ed25519_current(bytes, until)
+            .sign_device_ed25519_current(format, bytes, until)
             .await
             .unwrap();
         drop(intent);

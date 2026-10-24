@@ -7,7 +7,7 @@ and Storage owns atomic persistence. Never accept raw UI rosters as authority.
 No own crypto, identity binding, ledger or network framing. Candidate state and
 outputs become visible only after one shared durable checkpoint.
 
-No workstation Cargo, including fmt/metadata. Run strict stable checks, native
+No local Cargo, including fmt/metadata. Run strict stable checks, native
 and actual Wasm vectors, dependency policy, and 100% reachable line AND branch
 coverage on public CI. Document only justified unreachable exclusions. Expensive
 load/churn uses the established owned scheduler. First-party git dependencies
@@ -17,4 +17,4 @@ Plain-English commits, explicit-path staging, pull --rebase before main pushes.
 No force push, registry publication, paid operations, AI attribution or secrets.
 LGPL-3.0-only WITH LGPL-3.0-linking-exception. No GPL/AGPL-only dependencies.
 
-Current working rules (2026-10-12): the live line is branch v01 and CI is Crow through `ci-job` (never GitHub Actions); first-party dependencies follow v01. Punishment and the public record belong to the MVP and the alpha (Julian 2026-10-02 and 2026-10-11); they gate release as the Waves proposal defines.
+Current working rules (2026-10-12): the live line is branch v01 and CI is Crow through `ci-job` (never GitHub Actions); first-party dependencies follow v01. Punishment and the public record belong to the MVP and the alpha (decisions of 2026-10-02 and 2026-10-11); they gate release as the Waves proposal defines.

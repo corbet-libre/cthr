@@ -106,7 +106,7 @@ impl Published {
             }),
         );
         let current = self.charter.current(NOW).unwrap();
-        let policy = current.admission_policy(ACTION, NOW, 300).unwrap();
+        let policy = current.current_admission_policy(ACTION, NOW).unwrap();
         let schema = current.publication(cchr::Kind::Schema).signed_bytes();
         let candidate = peer
             .keys
@@ -150,7 +150,7 @@ impl Published {
             &store,
             &peer.binding,
             cpfl::Validation {
-                policy: current.admission_policy(ACTION, NOW, 300).unwrap(),
+                policy: current.current_admission_policy(ACTION, NOW).unwrap(),
                 signed_schema: schema,
                 contact: &clean,
             },

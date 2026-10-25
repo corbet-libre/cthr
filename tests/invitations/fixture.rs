@@ -127,7 +127,6 @@ impl Observation<'_> {
             contacts: self.contacts,
             issuance_action: self.issuance_action,
             minimum_profile_revision: self.minimum_profile_revision,
-            maximum_snapshot_age: 300,
             now: self.now,
         }
     }

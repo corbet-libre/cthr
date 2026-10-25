@@ -8,7 +8,6 @@ pub struct InvitationCurrent<'a> {
     pub contacts: &'a ctcs::Contacts,
     pub issuance_action: &'a str,
     pub minimum_profile_revision: u64,
-    pub maximum_snapshot_age: u64,
     pub now: u64,
 }
 
@@ -88,11 +87,7 @@ impl InvitationProof {
         }
         let policy = current
             .charter
-            .admission_policy(
-                current.issuance_action,
-                current.now,
-                current.maximum_snapshot_age,
-            )
+            .current_admission_policy(current.issuance_action, current.now)
             .map_err(|_| Error::Authority)?;
         let profile = cpfl::verify_publication(
             publication,

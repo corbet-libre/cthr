@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use cgrp::*;
-use futures::FutureExt as _;
 use ed25519_dalek::{Signer, SigningKey};
+use futures::FutureExt as _;
 use std::collections::BTreeSet;
 
 pub fn members(start: usize, end: usize) -> BTreeSet<String> {
@@ -234,7 +234,11 @@ pub fn history() -> Snapshot {
         },
     ];
     for (i, command) in steps.into_iter().enumerate() {
-        let consenters = if i == 0 { members(0, 12) } else { members(0, 13) };
+        let consenters = if i == 0 {
+            members(0, 12)
+        } else {
+            members(0, 13)
+        };
         let r = request(&state, command, "m0", consenters, false, 100);
         let prepared = prepare(&state, &r, &source, &TestAuthority, 100, 10).unwrap();
         let mut store = Memory(postcard::to_allocvec(&state).unwrap(), state.revision());

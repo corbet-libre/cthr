@@ -389,7 +389,9 @@ impl Threads {
         }
         next.current(&cert.binding, source, at)?;
         let (verified, info, tree) = self.verified_evidence(keys, &cert, evidence).await?;
-        if verified.commitment().map_err(authority_error)? != state.commitment().map_err(authority_error)? {
+        if verified.commitment().map_err(authority_error)?
+            != state.commitment().map_err(authority_error)?
+        {
             return Err(Error::Authority);
         }
         let working = self.working()?;

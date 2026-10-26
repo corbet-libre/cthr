@@ -198,7 +198,9 @@ pub async fn install(f: &mut Fixture, count: usize) -> Setup {
             command,
             consents: vec![],
         };
-        let signers = std::iter::once(&mut f.sender).chain(peers.iter_mut()).take(size);
+        let signers = std::iter::once(&mut f.sender)
+            .chain(peers.iter_mut())
+            .take(size);
         let request = consented(request, signers, false).await;
         let prepared = cgrp::prepare(&state, &request, &source, &authority, NOW, 10).unwrap();
         state = group_support::advance(&state, prepared, NOW);

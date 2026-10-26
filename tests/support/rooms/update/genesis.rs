@@ -9,7 +9,10 @@ pub(super) async fn refuses_mixed_context(
     clock: &mut Time,
 ) {
     let base = group_support::history();
-    let installed = store.read("cgrp", b"snapshot.v1").unwrap().map(<[u8]>::to_vec);
+    let installed = store
+        .read("cgrp", b"snapshot.v1")
+        .unwrap()
+        .map(<[u8]>::to_vec);
     let prepare = |at| {
         let request = group_support::request(
             &base,
@@ -50,7 +53,10 @@ pub(super) async fn refuses_mixed_context(
     );
     assert_eq!(store.version().unwrap(), prior);
     assert_eq!(
-        store.read("cgrp", b"snapshot.v1").unwrap().map(<[u8]>::to_vec),
+        store
+            .read("cgrp", b"snapshot.v1")
+            .unwrap()
+            .map(<[u8]>::to_vec),
         installed
     );
     assert!(

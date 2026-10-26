@@ -1,20 +1,40 @@
-# Agent instructions
+# cthr agent notes
 
-Write comments and documentation in English. Follow README Scope and CONTRACT.
-Threads owns maintained OpenMLS execution and accepted history. Groups owns
-membership, Waves owns release, Delivery owns retries/ACKs, Keys owns signing,
-and Storage owns atomic persistence. Never accept raw UI rosters as authority.
-No own crypto, identity binding, ledger or network framing. Candidate state and
-outputs become visible only after one shared durable checkpoint.
+Work in a lane (`~/agents/scratch/lane-new <lane>`); never edit `~/agents/scratch/ws`.
+Run commands from the lane root (`<lane>/ws`); `<lane>` below is your lane name.
 
-No local Cargo, including fmt/metadata. Run strict stable checks, native
-and actual Wasm vectors, dependency policy, and 100% reachable line AND branch
-coverage on public CI. Document only justified unreachable exclusions. Expensive
-load/churn uses the established owned scheduler. First-party git dependencies
-follow main, exactly one locked revision per crate. Keep reproducible locks.
+Build and test (quote the verdict line, never infer from a pipe):
+- `~/agents/scratch/cbuild <lane> test -p cthr` — lib `0`, `invitations`
+  `12`, `threads` `10` passed, exit 0
+- `~/agents/scratch/cbuild <lane> fmt -p cthr -- --check` — must be clean
+- Full gate (clippy `--locked`, native + actual wasm vectors, 100% reachable
+  line and branch coverage, dependency policy) runs in CI: `.ci/verify.sh`.
 
-Plain-English commits, explicit-path staging, pull --rebase before main pushes.
-No force push, registry publication, paid operations, AI attribution or secrets.
-LGPL-3.0-only WITH LGPL-3.0-linking-exception. No GPL/AGPL-only dependencies.
+Land: `cargo fmt` in touched repos, rebase on main (never force-push),
+`cbuild <lane> xtask land --dry`, then `xtask land`.
 
-Current working rules (2026-10-12): the live line is branch v01 and CI is Crow through `ci-job` (never GitHub Actions); first-party dependencies follow v01. Punishment and the public record belong to the MVP and the alpha (decisions of 2026-10-02 and 2026-10-11); they gate release as the Waves proposal defines.
+Invariants (rule -> enforcing test):
+- Real OpenMLS roundtrip is durable; tamper consumes no ratchets
+  -> `tests/threads.rs::real_roundtrip_is_durable_and_tamper_does_not_consume_ratchets`
+- Candidates refuse cross-scope and changed-checkpoint commits
+  -> `tests/threads.rs::candidates_refuse_cross_scope_and_changed_checkpoint`
+- Fork membership, policy and checkpoint publish as one transition
+  -> `tests/threads.rs::real_fork_membership_policy_and_checkpoint_are_one_transition`
+- Malformed checkpoints and locked keys fail without output
+  -> `tests/threads.rs::malformed_owned_checkpoints_and_locked_keys_fail_without_output`
+- Invitation needs the same authorized device and current publication
+  -> `tests/invitations.rs::genuine_invitation_uses_same_authorized_device_and_current_publication`
+- Certificate substitution never reuses consent or device proof
+  -> `tests/invitations.rs::certificate_substitution_never_reuses_original_consent_or_device_proof`
+- Signed revocations and policy epochs refuse old invitations
+  -> `tests/invitations.rs::fresh_signed_revocations_and_policy_epoch_refuse_old_invitation`
+- Wire framing is exact; signature damage never creates a capability
+  -> `tests/invitations.rs::wire_has_exact_framing_and_signature_damage_never_creates_capability`
+- Never accept raw UI rosters; Groups owns membership, Waves owns release
+  -> `tests/threads.rs::fork_owner_checkpoint_boundaries`,
+  `tests/invitations.rs::current_contact_scanner_is_required_even_with_genuine_publication`
+
+Pointers: `src/fork.rs`, `src/invitation.rs`, `src/room.rs`,
+`docs/CONTRACT.md`, `.ci/verify.sh`.
+Commits: explicit paths, imperative, author per `~/agents/AGENT.md`; no AI trailers.
+`publish=false`; LGPL-3.0-only WITH linking exception; no GPL/AGPL-only deps.

@@ -106,6 +106,8 @@ struct Snapshot {
     pending: Vec<Message>,
     #[serde(default)]
     fork: Option<fork::Fork>,
+    #[serde(default)]
+    visits: Vec<cgrp::WasHere>,
 }
 impl Drop for Snapshot {
     fn drop(&mut self) {
@@ -407,6 +409,7 @@ impl Threads {
                 accepted: vec![],
                 pending: vec![],
                 fork: None,
+                visits: vec![],
             }
         };
         let value = Self {

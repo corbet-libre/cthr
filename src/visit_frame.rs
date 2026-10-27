@@ -22,9 +22,7 @@ struct Body {
 
 /// Frame `content` with the facts that ride on it.
 pub fn encode(content: &[u8], visits: &[WasHere]) -> Result<Vec<u8>> {
-    if visits.len() > MAX_VISITS {
-        return Err(Error::Limit);
-    }
+    well_formed(visits)?;
     let body = Body {
         content: content.to_vec(),
         visits: visits.to_vec(),
@@ -45,10 +43,41 @@ pub fn decode(plaintext: &[u8]) -> Result<(Vec<u8>, Vec<WasHere>)> {
     if !tail.is_empty() {
         return Err(Error::Encoding);
     }
-    if body.visits.len() > MAX_VISITS {
+    well_formed(&body.visits)?;
+    Ok((body.content, body.visits))
+}
+
+/// At most [`MAX_VISITS`] facts, each naming the start of a visit bucket.
+fn well_formed(visits: &[WasHere]) -> Result<()> {
+    if visits.len() > MAX_VISITS {
         return Err(Error::Limit);
     }
-    Ok((body.content, body.visits))
+    if visits
+        .iter()
+        .any(|fact| fact.bucket_start % cgrp::BUCKET_TICKS != 0)
+    {
+        return Err(Error::Encoding);
+    }
+    Ok(())
+}
+
+/// Merge accepted facts into the room's stored set at `now` (unix seconds).
+/// The store holds exactly the inputs of the warm derivation
+/// ([`cgrp::warm_ends`]): facts whose bucket has begun and whose seat lifetime
+/// (warm plus cooling) has not passed. Anything else is not state, so it is
+/// neither kept nor added; duplicates collapse.
+pub(crate) fn remember(stored: &mut Vec<WasHere>, accepted: &[WasHere], now: u64) {
+    let now = now / cgrp::TICK_SECONDS;
+    let horizon = cgrp::WARM_MAX_TICKS + cgrp::COOL_MAX_TICKS;
+    let live = |fact: &WasHere| {
+        fact.bucket_start <= now && fact.bucket_start.saturating_add(horizon) > now
+    };
+    stored.retain(live);
+    for fact in accepted {
+        if live(fact) && !stored.contains(fact) {
+            stored.push(fact.clone());
+        }
+    }
 }
 
 /// A fact is accepted only when its member IS the MLS-authenticated sender and
@@ -93,6 +122,41 @@ mod tests {
         assert!(matches!(decode(&[]), Err(Error::Encoding)));
         let many = vec![fact("a"); MAX_VISITS + 1];
         assert!(matches!(encode(b"x", &many), Err(Error::Limit)));
+    }
+
+    #[test]
+    fn misaligned_buckets_are_malformed() {
+        let mut odd = fact("a");
+        odd.bucket_start = 1;
+        assert!(matches!(encode(b"x", &[odd.clone()]), Err(Error::Encoding)));
+        let mut wire = encode(b"x", &[fact("a")]).expect("encodes");
+        // The bucket is the frame's last varint: 0 becomes 1.
+        *wire.last_mut().unwrap() = 1;
+        assert!(matches!(decode(&wire), Err(Error::Encoding)));
+    }
+
+    #[test]
+    fn the_store_holds_exactly_the_derivation_inputs() {
+        let bucket = cgrp::BUCKET_TICKS;
+        let horizon = cgrp::WARM_MAX_TICKS + cgrp::COOL_MAX_TICKS;
+        let at = |member: &str, bucket_start: u64| WasHere {
+            bucket_start,
+            ..fact(member)
+        };
+        let seconds = |ticks: u64| ticks * cgrp::TICK_SECONDS;
+        let mut stored = vec![];
+        remember(
+            &mut stored,
+            &[at("a", 0), at("a", 0), at("b", bucket)],
+            seconds(10),
+        );
+        // The duplicate collapses; a bucket that has not begun is no input.
+        assert_eq!(stored, vec![at("a", 0)]);
+        remember(&mut stored, &[at("b", bucket)], seconds(bucket));
+        assert_eq!(stored, vec![at("a", 0), at("b", bucket)]);
+        // Past the seat lifetime a fact is neither kept nor added.
+        remember(&mut stored, &[at("c", 0)], seconds(horizon));
+        assert_eq!(stored, vec![at("b", bucket)]);
     }
 
     #[test]

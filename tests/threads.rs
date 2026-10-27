@@ -1725,9 +1725,29 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             .err(),
             Some(Error::Authority)
         );
+        let frame = |content: &[u8], visits: &[cgrp::WasHere]| {
+            cthr::visit_frame::encode(content, visits).unwrap()
+        };
+        let mut unknown_version = frame(b"x", &[]);
+        unknown_version[0] = cthr::visit_frame::VISIT_FRAME_VERSION + 1;
         for (plaintext, expected) in [
-            (Some(vec![]), Error::Limit),
-            (Some(vec![7; 1024 * 1024 / 2 + 1]), Error::Limit),
+            (Some(frame(&[], &[])), Error::Limit),
+            (Some(frame(&[7; 1024 * 1024 / 2 + 1], &[])), Error::Limit),
+            (Some(vec![]), Error::Encoding),
+            (Some(b"unframed".to_vec()), Error::Unavailable),
+            (Some(unknown_version), Error::Unavailable),
+            // P6c: a real MLS message from m0 stating m1's visit, or a visit
+            // to another room, is refused whole; nothing is stored or consumed
+            // (the roundtrips below reuse the same ratchet generations).
+            (Some(frame(b"x", &[was_here("m1", SLOT)])), Error::Authority),
+            (
+                Some(frame(b"x", &[was_here("m0", SLOT), was_here("m2", SLOT)])),
+                Error::Authority,
+            ),
+            (
+                Some(frame(b"x", &[was_here("m0", [9; 32])])),
+                Error::Authority,
+            ),
             (None, Error::Unavailable),
         ] {
             let wire = a.upstream_message(&astore, plaintext.as_deref()).await;
@@ -1745,14 +1765,34 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
             );
         }
         stage("fork message roundtrips");
-        for index in 0..policy.bands[0].burst {
-            let sent = at
-                .send_group(
+        // A foreign or misplaced fact is refused on the sending side too.
+        for visits in [was_here("m1", SLOT), was_here("m0", [9; 32])] {
+            assert_eq!(
+                at.send_group_with_visits(
                     &mut a.port(),
                     &contacts("m0", &astore),
                     &source,
                     &mut clock,
                     b"group message",
+                    &[visits],
+                )
+                .await
+                .err(),
+                Some(Error::Authority)
+            );
+        }
+        let own = [was_here("m0", SLOT)];
+        for index in 0..policy.bands[0].burst {
+            // The first message carries m0's own visit piggyback.
+            let visits: &[cgrp::WasHere] = if index == 0 { &own } else { &[] };
+            let sent = at
+                .send_group_with_visits(
+                    &mut a.port(),
+                    &contacts("m0", &astore),
+                    &source,
+                    &mut clock,
+                    b"group message",
+                    visits,
                 )
                 .await
                 .unwrap()
@@ -1789,6 +1829,16 @@ fn real_fork_membership_policy_and_checkpoint_are_one_transition() {
                 .await
                 .unwrap();
             assert_eq!(accepted.threads().history().len(), usize::from(index) + 1);
+            // The fact is room state on both sides, never message history.
+            assert_eq!(sent.threads().visits(), own);
+            assert_eq!(accepted.threads().visits(), own);
+            assert!(
+                accepted
+                    .threads()
+                    .history()
+                    .iter()
+                    .all(|message| message.bytes == b"group message")
+            );
             assert!(
                 accepted
                     .threads()
@@ -3012,4 +3062,13 @@ fn malformed_owned_checkpoints_and_locked_keys_fail_without_output() {
         );
         assert_eq!(package.into_threads().history().len(), 0);
     }));
+}
+
+/// A WasHere fact of `member` for `group` in the first visit bucket.
+fn was_here(member: &str, group: [u8; 32]) -> cgrp::WasHere {
+    cgrp::WasHere {
+        member: member.into(),
+        group,
+        bucket_start: 0,
+    }
 }

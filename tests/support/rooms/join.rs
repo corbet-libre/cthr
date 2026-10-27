@@ -455,15 +455,35 @@ fn newcomer_joins_by_external_commit_then_context_commit() {
         let handover = djoined.outgoing()[0].bytes().to_vec();
         assert!(!handover.windows(11).any(|v| v == b"profile key"));
         let contacts = ctcs::Contacts::load(b.binding.clone(), &bstore).unwrap();
-        let received = finished[0]
+        // A hand-over is a room secret, not a framed room conversation
+        // message (P6c visit frame): the conversation path refuses it without
+        // consuming the ratchet, and the member opens it as a secret.
+        assert_eq!(
+            finished[0]
+                .threads()
+                .receive_group(&mut b.port(), &contacts, &source, &mut clock, &handover)
+                .await
+                .err(),
+            Some(Error::Unavailable)
+        );
+        let (candidate, opened) = finished[0]
             .threads()
-            .receive_group(&mut b.port(), &contacts, &source, &mut clock, &handover)
-            .await
-            .unwrap()
-            .commit_group(&mut b.port(), &mut bstore, [31; 32], &source, &mut clock)
+            .open_room_secret(&mut b.port(), &source, &mut clock, &handover)
             .await
             .unwrap();
-        assert_eq!(received.threads().history()[0].bytes, b"profile key");
+        assert_eq!(opened.bytes(), b"profile key");
+        let received = candidate
+            .commit_room_secret(
+                &mut b.port(),
+                &mut bstore,
+                [31; 32],
+                &source,
+                &mut clock,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(received.threads().history().is_empty());
 
         // The same hand-over as a room secret (row 14.5): the sender is the
         // certified leaf m3 and the epoch the join epoch; the secret reaches the

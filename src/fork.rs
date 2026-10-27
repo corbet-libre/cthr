@@ -441,11 +441,28 @@ impl Threads {
         clock: &mut impl ckmg::Clock,
         bytes: &[u8],
     ) -> Result<Candidate> {
+        self.send_group_with_visits(keys, contacts, source, clock, bytes, &[])
+            .await
+    }
+    /// Send `bytes` with the member's own due WasHere facts riding piggyback
+    /// (P6c). Every fact must name the sending member and this room; the facts
+    /// are kept in the room's visit state, never in the message history.
+    pub async fn send_group_with_visits(
+        &self,
+        keys: &mut impl Custody,
+        contacts: &ctcs::Contacts,
+        source: &impl PolicySource,
+        clock: &mut impl ckmg::Clock,
+        bytes: &[u8],
+        visits: &[cgrp::WasHere],
+    ) -> Result<Candidate> {
         if bytes.is_empty() || bytes.len() > MAX_WIRE / 2 {
             return Err(Error::Limit);
         }
         self.contacts(contacts)?;
         let cert = self.local(keys).await?;
+        visit_frame::authenticated(visits, cert.binding.member(), &self.snapshot.slot)?;
+        let plaintext = visit_frame::encode(bytes, visits)?;
         let now = now(clock)?;
         let mut spec = self.snapshot.fork.clone().ok_or(Error::State)?;
         spec.current(&cert.binding, source, now)?;
@@ -466,7 +483,7 @@ impl Threads {
             .use_signer(|signer| {
                 check_signer(&signer, &cert)?;
                 group
-                    .create_message(&working.0, &ScopedSigner(signer), bytes)
+                    .create_message(&working.0, &ScopedSigner(signer), &plaintext)
                     .map_err(crypto_error)?
                     .tls_serialize_detached()
                     .map_err(encoding_error)
@@ -493,8 +510,13 @@ impl Threads {
         )?;
         candidate.snapshot.fork = Some(spec);
         candidate.snapshot.pending.push(message);
+        visit_frame::remember(&mut candidate.snapshot.visits, visits, now);
         Ok(candidate)
     }
+    /// Receive a room application message. Piggybacked WasHere facts are
+    /// accepted only when each names the MLS-authenticated sender and this
+    /// room; one foreign fact refuses the whole message before anything is
+    /// stored or any ratchet is consumed.
     pub async fn receive_group(
         &self,
         keys: &mut impl Custody,
@@ -535,10 +557,12 @@ impl Threads {
             return Err(Error::Authority);
         }
         spec.pace(sender.binding.member(), now)?;
-        let bytes = match processed.into_content() {
+        let plaintext = match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(message) => message.into_bytes(),
             _ => return Err(Error::Unavailable),
         };
+        let (bytes, visits) = visit_frame::decode(&plaintext)?;
+        visit_frame::authenticated(&visits, sender.binding.member(), &self.snapshot.slot)?;
         if bytes.is_empty() || bytes.len() > MAX_WIRE / 2 {
             return Err(Error::Limit);
         }
@@ -560,7 +584,13 @@ impl Threads {
         )?;
         candidate.snapshot.fork = Some(spec);
         candidate.snapshot.accepted.push(message);
+        visit_frame::remember(&mut candidate.snapshot.visits, &visits, now);
         Ok(candidate)
+    }
+    /// The room's accepted WasHere facts (own and received): exactly the
+    /// inputs of [`cgrp::warm_ends`] for this room.
+    pub fn visits(&self) -> &[cgrp::WasHere] {
+        &self.snapshot.visits
     }
     /// Only local accepted history, selected under the authentic newcomer policy.
     /// Delivery inside a new MLS group belongs to the prepared join transaction.

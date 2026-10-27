@@ -5,6 +5,7 @@ mod group_context;
 pub mod invitation;
 mod leave;
 mod room;
+pub mod visit_frame;
 pub use attend::{ContextFeed, JoinParts, JoinSession, SessionStore, SessionThreads};
 pub use fork::{MAX_HANDOVER, MAX_ROOM_SECRET, RoomAdmission, RoomJoin, RoomSecret};
 pub use group_context::{ParentEvidence, VerifiedParent};

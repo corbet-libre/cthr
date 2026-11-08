@@ -3,19 +3,19 @@ name = "cthr"
 version = "0.1.0"
 edition = "2024"
 description = "OpenMLS conversations and accepted history"
-repository = "https://git.corbet.ch/corbet-foss/cthr.git"
+repository = "https://git.corbet.ch/corbet-libre/cthr.git"
 license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
 publish = false
 
 [dependencies]
-ckmg = { git = "https://git.corbet.ch/corbet-foss/ckmg.git", branch = "main" }
+ckmg = { git = "https://git.corbet.ch/corbet-libre/ckmg.git", branch = "main" }
 cwst = { git = "https://git.corbet.ch/corbet-foss/cwst.git", branch = "main" }
-ctnd = { git = "https://git.corbet.ch/corbet-foss/ctnd.git", branch = "main" }
-cgrp = { git = "https://git.corbet.ch/corbet-foss/cgrp.git", branch = "main" }
-ctcs = { git = "https://git.corbet.ch/corbet-foss/ctcs.git", branch = "main" }
-cchr = { git = "https://git.corbet.ch/corbet-foss/cchr.git", branch = "main" }
-cpfl = { git = "https://git.corbet.ch/corbet-foss/cpfl.git", branch = "main" }
-cshm = { git = "https://git.corbet.ch/corbet-foss/cshm", branch = "main" }
+ctnd = { git = "https://git.corbet.ch/corbet-libre/ctnd.git", branch = "main" }
+cgrp = { git = "https://git.corbet.ch/corbet-libre/cgrp.git", branch = "main" }
+ctcs = { git = "https://git.corbet.ch/corbet-libre/ctcs.git", branch = "main" }
+cchr = { git = "https://git.corbet.ch/corbet-libre/cchr.git", branch = "main" }
+cpfl = { git = "https://git.corbet.ch/corbet-libre/cpfl.git", branch = "main" }
+cshm = { git = "https://git.corbet.ch/corbet-libre/cshm.git", branch = "main" }
 openmls = "0.9"
 openmls_rust_crypto = "0.6"
 openmls_traits = "0.6"
@@ -32,7 +32,7 @@ openmls = { version = "0.9", features = ["js"] }
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 
 [dev-dependencies]
-csgn = { git = "https://git.corbet.ch/corbet-foss/csgn", branch = "main", default-features = false, features = ["volatile-signer"] }
+csgn = { git = "https://git.corbet.ch/corbet-libre/csgn.git", branch = "main", default-features = false, features = ["volatile-signer"] }
 futures = "0.3"
 wasm-bindgen-test = "0.3"
 ed25519-dalek = "3"

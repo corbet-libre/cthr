@@ -1,4 +1,5 @@
 use super::*;
+use crate::support;
 
 pub(super) async fn producer(
     f: &mut Fixture,

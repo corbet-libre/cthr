@@ -89,7 +89,7 @@ jobs:
           WASM_BINDGEN_TEST_TIMEOUT: '60'
         run: |
           export CHROMEDRIVER="$(command -v chromedriver)"
-          cargo test --locked --target wasm32-unknown-unknown --test threads
+          cargo test --locked --target wasm32-unknown-unknown --test it
 
       - name: Require formatting
         if: always() && steps.formatting.outcome != 'success'

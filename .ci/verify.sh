@@ -37,7 +37,7 @@ ln -sf "$CHROME_BIN" "$RUNNER_TEMP/bin/google-chrome"
 export PATH="$RUNNER_TEMP/bin:$PATH"
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 export WASM_BINDGEN_USE_BROWSER=1 WASM_BINDGEN_TEST_TIMEOUT=60
-cargo test --locked --target wasm32-unknown-unknown --test threads --test invitations
+cargo test --locked --target wasm32-unknown-unknown --test it
 rustup run nightly rustc --version
 NIGHTLY_RUSTC="$(rustup which --toolchain nightly rustc)"
 NIGHTLY_CARGO="$(rustup which --toolchain nightly cargo)"

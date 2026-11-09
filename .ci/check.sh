@@ -20,7 +20,7 @@ case "${1:?selected check required}" in
     export CHROMEDRIVER
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
     export WASM_BINDGEN_USE_BROWSER=1 WASM_BINDGEN_TEST_TIMEOUT=60
-    cargo test --locked --target wasm32-unknown-unknown --test threads
+    cargo test --locked --target wasm32-unknown-unknown --test it
     ;;
   coverage)
     command -v cargo-llvm-cov >/dev/null

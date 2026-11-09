@@ -6,7 +6,8 @@ mod binary_payload_refusals;
 mod group_support;
 #[path = "support/rooms.rs"]
 mod rooms;
-mod support;
+use crate::support;
+use crate::support::{Guard, Machine, Time, create, machine, prf};
 use ckmg::{Binding, KeyHandle, Lineage};
 use ctcs::DeviceAuthority;
 use cthr::{DirectAuthority, Error, Event, Operation, Threads, keys::KeyPort};
@@ -14,7 +15,6 @@ use cwst::{Store, backend::Memory};
 use ed25519_dalek::{Signer, SigningKey};
 use futures::executor::block_on;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-use support::{Guard, Machine, Time, create, machine, prf};
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 const SLOT: [u8; 32] = [17; 32];

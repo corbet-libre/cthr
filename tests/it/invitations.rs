@@ -12,12 +12,10 @@ mod fixture;
 mod keys;
 #[path = "invitations/profile.rs"]
 mod profile;
-#[path = "support/mod.rs"]
-mod support;
+use self::fixture::Fixture;
 use cthr::invitation::{
     InvitationCurrent, InvitationExpected, InvitationProof, InvitationStatement, VerifiedInvitation,
 };
-use fixture::Fixture;
 use futures::executor::block_on;
 
 const ORIGIN: &str = "https://alpha.example.test";

@@ -1,4 +1,5 @@
 use super::*;
+use crate::support;
 use cthr::invitation::InvitationAuthority;
 
 // This adapter commits the original Groups journal through the real encrypted

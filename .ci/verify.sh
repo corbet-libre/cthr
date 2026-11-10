@@ -12,7 +12,6 @@ export RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
 export GITHUB_PATH="${GITHUB_PATH:-$RUNNER_TEMP/github_path}"
 touch "$GITHUB_PATH"
 python3 .github/check-first-party.py
-bash .ci/update-our-crates.sh
 cargo fmt --all
 git diff -- src tests > "$ARTIFACT_ROOT/formatting.patch"
 test ! -s "$ARTIFACT_ROOT/formatting.patch"

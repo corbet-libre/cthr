@@ -15,7 +15,7 @@ def check(contracts, metadata):
         if len(packages) != 1:
             raise ValueError(f'Missing or duplicate resolved owner: {name}')
         package = packages[0]
-        source = rf'git\+https://github\.com/corbet-foss/{re.escape(name)}\?branch=main#[0-9a-f]{{40}}'
+        source = rf'git\+https://git\.corbet\.ch/corbet-libre/{re.escape(name)}(?:\.git)?\?branch=main#[0-9a-f]{{40}}'
         if not re.fullmatch(source, package.get('source') or ''):
             raise ValueError(f'Owner must resolve from current main: {name}')
         root = Path(package['manifest_path']).resolve().parent
